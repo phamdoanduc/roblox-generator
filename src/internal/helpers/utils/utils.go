@@ -8,7 +8,6 @@ import (
 	randa "crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
-	"encoding/asn1"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -28,8 +27,15 @@ var (
 	mu      sync.Mutex
 )
 
-type ECDSASignature struct {
-	R, S *big.Int
+// rawP1363Signature encodes r and s as a fixed-width big-endian pair
+// (IEEE P1363 format), matching the byte layout crypto.subtle.sign()
+// produces for ECDSA — the format the server-side verifier expects.
+func rawP1363Signature(r, s *big.Int, curve elliptic.Curve) []byte {
+	byteLen := (curve.Params().BitSize + 7) / 8
+	out := make([]byte, byteLen*2)
+	r.FillBytes(out[:byteLen])
+	s.FillBytes(out[byteLen:])
+	return out
 }
 
 func init() {
@@ -78,7 +84,23 @@ func e8() string {
 }
 
 func GetProxy() string {
-	return proxies[rand.Intn(len(proxies))]
+	p := proxies[rand.Intn(len(proxies))]
+	
+	// Normalize the proxy string by removing the protocol prefix if present
+	p = strings.TrimPrefix(p, "http://")
+	p = strings.TrimPrefix(p, "https://")
+	
+	parts := strings.Split(p, ":")
+	if len(parts) == 4 {
+		// format is host:port:user:pass
+		return fmt.Sprintf("http://%s:%s@%s:%s", parts[2], parts[3], parts[0], parts[1])
+	}
+	
+	// For other formats (e.g. host:port, or already formatted user:pass@host:port)
+	if !strings.HasPrefix(p, "http://") && !strings.HasPrefix(p, "https://") && !strings.HasPrefix(p, "socks") {
+		p = "http://" + p
+	}
+	return p
 }
 
 func GenerateSecureAuth(serverNonce string) (*class.SecureAuth, error) {
@@ -107,14 +129,14 @@ func GenerateSecureAuth(serverNonce string) (*class.SecureAuth, error) {
 		return nil, err
 	}
 
-	sigStruct := ECDSASignature{R: r, S: s}
+	// WebCrypto's crypto.subtle.sign({name:"ECDSA",...}) returns a raw,
+	// fixed-width IEEE P1363 signature (r||s, each padded to the curve's
+	// coordinate size), not an ASN.1 DER SEQUENCE. Real browsers running
+	// generateSecureAuthIntent() produce this raw form, so we must match it
+	// here instead of asn1.Marshal-ing an ECDSASignature{R,S}.
+	rawSignature := rawP1363Signature(r, s, elliptic.P256())
 
-	derSignature, err := asn1.Marshal(sigStruct)
-	if err != nil {
-		return nil, err
-	}
-
-	saiSignature := base64.StdEncoding.EncodeToString(derSignature)
+	saiSignature := base64.StdEncoding.EncodeToString(rawSignature)
 
 	return &class.SecureAuth{
 		ClientPublicKey:      clientPublicKey,
@@ -124,22 +146,57 @@ func GenerateSecureAuth(serverNonce string) (*class.SecureAuth, error) {
 	}, nil
 }
 
-func GetTransparent() string {
-	return fmt.Sprintf("00-%s-%s-00", eZ(), e8())
+// NewTraceID returns a fresh W3C trace-id, meant to be generated once per
+// top-level operation (e.g. once per registration attempt) and kept stable
+// across the requests that belong to it.
+func NewTraceID() string {
+	return eZ()
 }
 
+// NewSpanID returns a fresh W3C span-id. Real browser tracing instrumentation
+// mints a new span-id per outgoing HTTP request even when the trace-id is
+// shared, so callers must call this per-request rather than reusing one value.
+func NewSpanID() string {
+	return e8()
+}
+
+func DecodeBase64Safe(s string) string {
+	decoded, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return fmt.Sprintf("base64 error: %s", err)
+	}
+	return string(decoded)
+}
+
+// ParseArkoseHeader decodes the Rblx-Challenge-Metadata base64 header and
+// returns an ArkoseResponse. It handles both the old format
+// (dataExchangeBlob/unifiedCaptchaId) and the new format
+// (challengeId/sharedParameters with eligibleMethods).
 func ParseArkoseHeader(headerVal string) (*class.ArkoseResponse, error) {
 	decoded, err := base64.StdEncoding.DecodeString(headerVal)
 	if err != nil {
 		return nil, err
 	}
 
-	var ark class.ArkoseResponse
-	if err := json.Unmarshal(decoded, &ark); err != nil {
+	var raw class.ChallengeMetadataRaw
+	if err := json.Unmarshal(decoded, &raw); err != nil {
 		return nil, err
 	}
 
-	return &ark, nil
+	ark := &class.ArkoseResponse{
+		DataExchangeBlob: raw.DataExchangeBlob,
+		UnifiedCaptchaId: raw.UnifiedCaptchaId,
+		RequestPath:      raw.RequestPath,
+		RequestMethod:    raw.RequestMethod,
+	}
+
+	// New format: dataExchangeBlob is missing, use challengeId as UnifiedCaptchaId
+	if ark.DataExchangeBlob == "" && raw.ChallengeId != "" {
+		ark.UnifiedCaptchaId = raw.ChallengeId
+		// No blob in new format when eligibleMethods is empty
+	}
+
+	return ark, nil
 }
 
 func SaveAccount(user, pass, cookie string) error {
@@ -155,6 +212,34 @@ func SaveAccount(user, pass, cookie string) error {
 	defer f.Close()
 
 	_, err = f.WriteString(line)
+	return err
+}
+
+// LogEmptyBlob persists the raw Rblx-Challenge-Metadata header whenever the
+// decoded DataExchangeBlob comes back empty, so real examples are available
+// for root-causing why Roblox/Arkose sometimes issues a blank blob.
+func LogEmptyBlob(unifiedCaptchaID, rawHeaderB64 string) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if err := os.MkdirAll("output", 0755); err != nil {
+		return err
+	}
+
+	f, err := os.OpenFile("output/empty_blob_log.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	entry := fmt.Sprintf(
+		"[%s] UnifiedCaptchaId=%s rawHeaderB64=%s decoded=%s\n",
+		time.Now().Format(time.RFC3339),
+		unifiedCaptchaID,
+		rawHeaderB64,
+		DecodeBase64Safe(rawHeaderB64),
+	)
+	_, err = f.WriteString(entry)
 	return err
 }
 

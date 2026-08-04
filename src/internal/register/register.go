@@ -72,6 +72,13 @@ const (
 // Arkose-blob/UA match at the cost of breaking the JA3/UA match on every
 // request this client itself sends to Roblox -- so such UAs must be rejected.
 func isTLSConsistentUA(ua string) bool {
+	// azuretls.Chrome's ClientHello is still hardcoded to a Chrome-133 shape
+	// (see the const block above) -- it was NOT made version-dynamic when the
+	// solver's fingerprint pool gained browser_version support. Until this
+	// client's own TLS profile can track browser_version too, adopting a
+	// solver UA outside Chrome/133 would recreate the exact JA3/UA mismatch
+	// this function exists to prevent, just on the registration side instead
+	// of the solving side.
 	return strings.Contains(ua, "Chrome/133")
 }
 
