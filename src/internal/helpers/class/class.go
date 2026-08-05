@@ -56,12 +56,42 @@ type AuditItem struct {
 type ArkoseResponse struct {
 	DataExchangeBlob string `json:"dataExchangeBlob"`
 	UnifiedCaptchaId string `json:"unifiedCaptchaId"`
+	RequestPath      string `json:"requestPath"`
+	RequestMethod    string `json:"requestMethod"`
+}
+
+// ChallengeMetadataRaw represents the raw decoded JSON from Rblx-Challenge-Metadata,
+// supporting both the old format (dataExchangeBlob/unifiedCaptchaId) and
+// the new format (challengeId/sharedParameters). requestPath/requestMethod identify
+// the original request the challenge is gating, and must be echoed back in the
+// ChallengeMetadata sent to /challenge/v1/continue or Roblox rejects it with a
+// generic "an internal error occurred" 403.
+type ChallengeMetadataRaw struct {
+	DataExchangeBlob string `json:"dataExchangeBlob"`
+	UnifiedCaptchaId string `json:"unifiedCaptchaId"`
+	RequestPath      string `json:"requestPath"`
+	RequestMethod    string `json:"requestMethod"`
+
+	ChallengeId      string               `json:"challengeId"`
+	RedemptionToken  string               `json:"redemptionToken"`
+	SharedParameters *SharedParameters    `json:"sharedParameters,omitempty"`
+}
+
+type SharedParameters struct {
+	ShouldAnalyze         bool     `json:"shouldAnalyze"`
+	GenericChallengeId    string   `json:"genericChallengeId"`
+	UseContinueMode       bool     `json:"useContinueMode"`
+	RenderNativeChallenge bool     `json:"renderNativeChallenge"`
+	DelayParameters       any      `json:"delayParameters"`
+	EligibleMethods       []string `json:"eligibleMethods"`
 }
 
 type ChallengeMetadata struct {
 	UnifiedCaptchaId string `json:"unifiedCaptchaId"`
 	CaptchaToken     string `json:"captchaToken"`
 	ActionType       string `json:"actionType"`
+	RequestPath      string `json:"requestPath,omitempty"`
+	RequestMethod    string `json:"requestMethod,omitempty"`
 }
 
 type ChallengeResponse struct {
@@ -77,6 +107,7 @@ type Config struct {
 
 type CaptchaConfig struct {
 	Api_Key         string `yaml:"api_key"`
+	Provider        string `yaml:"provider"`
 	Http_Version    string `yaml:"http_version"`
 	Browser_Version string `yaml:"browser_version"`
 	Solve_POW       bool   `yaml:"solve_pow"`

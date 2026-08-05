@@ -6,11 +6,13 @@ import (
 	"RobloxRegister/src/internal/helpers/roblox_profile"
 	"RobloxRegister/src/internal/helpers/utils"
 
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html"
 	"math/rand"
+	"net/http"
 	"os"
 	"regexp"
 	"strconv"
@@ -57,29 +59,13 @@ const (
 	// below MUST stay pinned to Chrome/133 so the JA3 fingerprint and the
 	// application-layer UA agree; sending e.g. Chrome/146 headers over a Chrome/133
 	// ClientHello is a deterministic, trivially-detectable bot signature.
-	userAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
-	sec_ch_ua       = `"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"`
-	// Reverted from fr-FR to en-US to match urlLocale=en_us and the working
-	// original-tool baseline (~11% success). The netz fork's French header over
-	// a Germany/France residential pool with an en_us URL locale is a clean
-	// locale/geo contradiction the risk engine can score deterministically.
-	accept_language = "en-US,en;q=0.9"
+	userAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+	sec_ch_ua       = `"Not;A=Brand";v="99", "Google Chrome";v="148", "Chromium";v="148"`
+	accept_language = "en-US,en;q=0.9;q=0.9"
 )
 
-// isTLSConsistentUA reports whether a UA string declares the same Chrome major
-// version that azuretls.Chrome actually negotiates at the TLS layer (133).
-// Adopting a solver-provided UA that claims a different version would fix the
-// Arkose-blob/UA match at the cost of breaking the JA3/UA match on every
-// request this client itself sends to Roblox -- so such UAs must be rejected.
 func isTLSConsistentUA(ua string) bool {
-	// azuretls.Chrome's ClientHello is still hardcoded to a Chrome-133 shape
-	// (see the const block above) -- it was NOT made version-dynamic when the
-	// solver's fingerprint pool gained browser_version support. Until this
-	// client's own TLS profile can track browser_version too, adopting a
-	// solver UA outside Chrome/133 would recreate the exact JA3/UA mismatch
-	// this function exists to prevent, just on the registration side instead
-	// of the solving side.
-	return strings.Contains(ua, "Chrome/133")
+	return strings.Contains(ua, "Chrome/148") || strings.Contains(ua, "Chrome/133")
 }
 
 func RegistrationProcess(CaptchaConfig class.CaptchaConfig, worker_id int, proxyStr string) bool {
@@ -176,7 +162,33 @@ func (g *Container) DoRequest(method, url string, body []byte) (*azuretls.Respon
 // cookie names. This exists purely to test whether a real-browser-obtained
 // PerimeterX/Arkose cookie changes registration outcome vs. azuretls's own
 // TLS-fingerprint-only warm-up -- production runs never set this env var, so
-// this is a no-op by default.
+func fetchPXCookiesFromHarvester(proxyStr string) map[string]string {
+	harvesterURL := os.Getenv("PX_HARVESTER_URL")
+	if harvesterURL == "" {
+		harvesterURL = "http://127.0.0.1:5000/get_px_cookies"
+	}
+	payload, _ := json.Marshal(map[string]string{"proxy": proxyStr})
+	req, err := http.NewRequest("POST", harvesterURL, bytes.NewBuffer(payload))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil || resp.StatusCode != 200 {
+		return nil
+	}
+	defer resp.Body.Close()
+	var res struct {
+		Status  string            `json:"status"`
+		Cookies map[string]string `json:"cookies"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil
+	}
+	return res.Cookies
+}
+
 func loadPrimedCookies() map[string]string {
 	path := os.Getenv("PRIMED_COOKIES_FILE")
 	if path == "" {
@@ -272,7 +284,12 @@ func (g *Container) BeforeSignUp() error {
 
 	cookies := parseCookies(response.Header)
 
-	if primed := loadPrimedCookies(); primed != nil {
+	if pxCookies := fetchPXCookiesFromHarvester(g.Proxy); len(pxCookies) > 0 {
+		for k, v := range pxCookies {
+			cookies[k] = v
+		}
+		utils.Output("INFO", fmt.Sprintf("%s - harvested %d PX cookie(s)", g.User, len(pxCookies)))
+	} else if primed := loadPrimedCookies(); primed != nil {
 		for k, v := range primed {
 			cookies[k] = v
 		}
@@ -281,17 +298,26 @@ func (g *Container) BeforeSignUp() error {
 
 	if len(cookies) != 0 {
 
-		// Reverted to the original-tool's strict 5-name allowlist. The netz
-		// fork's "carry every Set-Cookie through the flow" change (incl. rotating
-		// __cf_bm/_px3/pxcts) was tested live multiple times and produced 0%
-		// success vs the original's ~11% with the strict strip. Stripping the
-		// anti-bot vendor cookies is what the working baseline actually does.
 		cookies["RBXPaymentsFlowContext"] = fmt.Sprintf("%s,", uuid.New())
 		cookies["RBXcb"] = "RBXViralAcquisition%3Dfalse%26RBXSource%3Dfalse%26GoogleAnalytics%3Dfalse"
 
-		for _, key := range order_cookies {
+		// Explicitly include PX cookies if harvested
+		pxKeys := []string{"_px3", "pxcts", "_pxvid", "_pxhd", "_px2"}
+		allCookieKeys := append(order_cookies, pxKeys...)
+
+		for _, key := range allCookieKeys {
 			if value, ok := cookies[key]; ok {
-				g.Cookies = append(g.Cookies, []string{"cookie", key + "=" + value})
+				// avoid duplicate keys if already added
+				exists := false
+				for _, existing := range g.Cookies {
+					if len(existing) == 2 && strings.HasPrefix(existing[1], key+"=") {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					g.Cookies = append(g.Cookies, []string{"cookie", key + "=" + value})
+				}
 			}
 		}
 
@@ -574,14 +600,111 @@ func (g *Container) SignUp() error {
 		ArkoseBlob := ark.DataExchangeBlob
 		UnifiedCaptchaId := ark.UnifiedCaptchaId
 
-		utils.Output("DEBUG", fmt.Sprintf("Blob len=%d, UnifiedCaptchaId=%s", len(ArkoseBlob), UnifiedCaptchaId))
-		utils.Output("DEBUG", fmt.Sprintf("RAW CHALLENGE HEADER: %s", utils.DecodeBase64Safe(header)))
-		if len(ArkoseBlob) == 0 {
-			utils.Output("DEBUG", fmt.Sprintf("Raw header (decoded): %s", utils.DecodeBase64Safe(header)))
-			if logErr := utils.LogEmptyBlob(UnifiedCaptchaId, header); logErr != nil {
-				utils.Output("DEBUG", fmt.Sprintf("LogEmptyBlob error: %s", logErr))
+		outerChallengeType := response.Header.Get("Rblx-Challenge-Type")
+		if outerChallengeType == "" {
+			outerChallengeType = "captcha"
+		}
+		utils.Output("DEBUG", fmt.Sprintf("Signup returned challenge type: %s", outerChallengeType))
+
+		challengeIdHeader := response.Header.Get("Rblx-Challenge-Id")
+
+		// If Roblox returned captchav2, we MUST call /v2/captcha FIRST to get real redemption_token and the inner Arkose blob!
+		if strings.EqualFold(outerChallengeType, "captchav2") {
+			targetId := UnifiedCaptchaId
+			if challengeIdHeader != "" {
+				targetId = challengeIdHeader
 			}
-			return fmt.Errorf("empty blob from Roblox - no eligible captcha method, retry with new proxy")
+			utils.Output("DEBUG", fmt.Sprintf("Step 1: Requesting redemption_token from /v2/captcha for %s...", targetId))
+
+			v2CapBody, _ := json.Marshal(map[string]string{
+				"challenge_id": targetId,
+			})
+
+			// Pre-flight OPTIONS for /v2/captcha
+			g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
+				{"accept", "*/*"},
+				{"access-control-request-headers", "content-type,traceparent,x-csrf-token"},
+				{"access-control-request-method", "POST"},
+				{"origin", "https://www.roblox.com"},
+				{"sec-fetch-mode", "cors"},
+				{"user-agent", userAgent},
+			}
+			_, _ = g.DoRequest("OPTIONS", "https://apis.roblox.com/v2/captcha?urlLocale=en_us", nil)
+
+			g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
+				{"content-length", strconv.Itoa(len(v2CapBody))},
+				{"sec-ch-ua-platform", "\"Windows\""},
+				{"x-csrf-token", g.XCsrfToken},
+				{"sec-ch-ua", sec_ch_ua},
+				{"sec-ch-ua-mobile", "?0"},
+				{"traceparent", g.Traceparent()},
+				{"user-agent", userAgent},
+				{"accept", "application/json, text/plain, */*"},
+				{"content-type", "application/json;charset=UTF-8"},
+				{"origin", "https://www.roblox.com"},
+				{"sec-fetch-site", "same-site"},
+				{"sec-fetch-mode", "cors"},
+				{"sec-fetch-dest", "empty"},
+				{"referer", "https://www.roblox.com/"},
+				{"accept-encoding", "gzip, deflate, br, zstd"},
+				{"accept-language", accept_language},
+			}
+			g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, g.Cookies...)
+
+			respRedeem, errRedeem := g.DoRequest("POST", "https://apis.roblox.com/v2/captcha?urlLocale=en_us", v2CapBody)
+			if errRedeem != nil || respRedeem.HttpResponse.StatusCode != 200 {
+				return fmt.Errorf("failed get redemption_token from /v2/captcha: status=%d", respRedeem.HttpResponse.StatusCode)
+			}
+
+			var redeemRes struct {
+				RedemptionToken string `json:"redemption_token"`
+			}
+			if err := json.Unmarshal(respRedeem.Body, &redeemRes); err != nil || redeemRes.RedemptionToken == "" {
+				return fmt.Errorf("invalid redemption_token response: %s", string(respRedeem.Body))
+			}
+
+			utils.Output("DEBUG", fmt.Sprintf("Got real redemption_token: %s", redeemRes.RedemptionToken[:15]))
+
+			// Step 2: Continue captchav2 with real redemptionToken
+			captchav2Meta := fmt.Sprintf(`{"redemptionToken":"%s"}`, redeemRes.RedemptionToken)
+			captchav2Body, _ := json.Marshal(map[string]string{
+				"challengeId":       targetId,
+				"challengeType":     "captchav2",
+				"challengeMetadata": captchav2Meta,
+			})
+
+			respV2, errV2 := g.DoRequest("POST", "https://apis.roblox.com/challenge/v1/continue?urlLocale=en_us", captchav2Body)
+			if errV2 != nil || respV2.HttpResponse.StatusCode != 200 {
+				return fmt.Errorf("captchav2 continue failed: status=%d body=%s", respV2.HttpResponse.StatusCode, string(respV2.Body))
+			}
+
+			// Extract inner Arkose metadata blob & unifiedCaptchaId from continue response
+			var v2ContinueRes struct {
+				ChallengeId       string `json:"challengeId"`
+				ChallengeMetadata string `json:"challengeMetadata"`
+			}
+			if err := json.Unmarshal(respV2.Body, &v2ContinueRes); err == nil && v2ContinueRes.ChallengeMetadata != "" {
+				var innerMeta struct {
+					DataExchangeBlob string `json:"dataExchangeBlob"`
+					UnifiedCaptchaId string `json:"unifiedCaptchaId"`
+				}
+				if err := json.Unmarshal([]byte(v2ContinueRes.ChallengeMetadata), &innerMeta); err == nil {
+					if innerMeta.DataExchangeBlob != "" {
+						ArkoseBlob = innerMeta.DataExchangeBlob
+					}
+					if innerMeta.UnifiedCaptchaId != "" {
+						UnifiedCaptchaId = innerMeta.UnifiedCaptchaId
+					}
+					utils.Output("DEBUG", fmt.Sprintf("Extracted inner Arkose Blob len=%d, captchaId=%s", len(ArkoseBlob), UnifiedCaptchaId))
+				}
+			}
+			if len(ArkoseBlob) == 0 {
+				utils.Output("DEBUG", fmt.Sprintf("Raw header (decoded): %s", utils.DecodeBase64Safe(header)))
+				if logErr := utils.LogEmptyBlob(UnifiedCaptchaId, header); logErr != nil {
+					utils.Output("DEBUG", fmt.Sprintf("LogEmptyBlob error: %s", logErr))
+				}
+				return fmt.Errorf("empty blob from Roblox - no eligible captcha method, retry with new proxy")
+			}
 		}
 
 		token, err := funcaptcha.GetToken(g.CapConfig.Provider, g.CapConfig.Api_Key, g.CapConfig.Http_Version, g.CapConfig.Browser_Version, ArkoseBlob, g.Proxy, g.CookieHeader(), g.CapConfig.Solve_POW)
@@ -598,11 +721,6 @@ func (g *Container) SignUp() error {
 
 		utils.Output("CAPTCHA", fmt.Sprintf("Solved %s", captchaToken[:28]))
 
-		// Only adopt the solver's fingerprint UA when it's TLS-consistent (Chrome/133,
-		// matching azuretls.Chrome's fixed ClientHello -- see isTLSConsistentUA).
-		// A solver UA from a different Chrome version would match the Arkose blob
-		// but break the JA3/UA match on this client's own requests to Roblox, which
-		// is the mismatch actually observed at the /challenge/v1/continue 403s.
 		effectiveUA := userAgent
 		effectiveSecChUa := sec_ch_ua
 		if strings.TrimSpace(token.UserAgent) != "" && isTLSConsistentUA(token.UserAgent) {
@@ -614,9 +732,6 @@ func (g *Container) SignUp() error {
 			utils.Output("DEBUG", fmt.Sprintf("solver UA %q is not TLS-consistent (want Chrome/133) - falling back to pinned identity", token.UserAgent))
 		}
 
-		// Real browser's challengeMetadata (both in the /challenge/v1/continue body and
-		// the rblx-challenge-metadata retry header) has exactly these 3 fields -- no
-		// requestPath/requestMethod, confirmed against a captured real-browser signup HAR.
 		ChallengeMeta := &class.ChallengeMetadata{
 			UnifiedCaptchaId: UnifiedCaptchaId,
 			CaptchaToken:     captchaToken,
@@ -668,10 +783,40 @@ func (g *Container) SignUp() error {
 
 		utils.Output("DEBUG", fmt.Sprintf("continue request body: %s", string(body)))
 
-		// A real user takes a beat between the widget resolving and the
-		// browser's own JS firing this POST (render + microtask delay, not
-		// instant). Submitting it in the same instant the token is minted is
-		// a zero-latency signature the risk engine can key on deterministically.
+		// 1. Send CORS Pre-flight OPTIONS request (matching real browser ground truth)
+		g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
+			{"accept", "*/*"},
+			{"access-control-request-headers", "content-type,traceparent,x-csrf-token"},
+			{"access-control-request-method", "POST"},
+			{"origin", "https://www.roblox.com"},
+			{"sec-fetch-mode", "cors"},
+			{"user-agent", effectiveUA},
+		}
+		_, _ = g.DoRequest("OPTIONS", "https://apis.roblox.com/challenge/v1/continue?urlLocale=en_us", nil)
+
+		// 2. Prepare headers for actual POST /continue
+		g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
+			{"content-length", strconv.Itoa(len(body))},
+			{"sec-ch-ua-platform", "\"Windows\""},
+			{"x-csrf-token", g.XCsrfToken},
+			{"sec-ch-ua", effectiveSecChUa},
+			{"sec-ch-ua-mobile", "?0"},
+			{"traceparent", g.Traceparent()},
+			{"user-agent", effectiveUA},
+			{"accept", "application/json, text/plain, */*"},
+			{"content-type", "application/json;charset=UTF-8"},
+			{"origin", "https://www.roblox.com"},
+			{"sec-fetch-site", "same-site"},
+			{"sec-fetch-mode", "cors"},
+			{"sec-fetch-dest", "empty"},
+			{"referer", "https://www.roblox.com/"},
+			{"accept-encoding", "gzip, deflate, br, zstd"},
+			{"accept-language", accept_language},
+		}
+
+		g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, g.Cookies...)
+		g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"priority", "u=1, i"})
+
 		time.Sleep(time.Duration(1200+rand.Intn(1800)) * time.Millisecond)
 
 		response, err = g.DoRequest("POST", "https://apis.roblox.com/challenge/v1/continue?urlLocale=en_us", body)
@@ -682,56 +827,70 @@ func (g *Container) SignUp() error {
 
 		if response.HttpResponse.StatusCode != 200 {
 			fmt.Printf("[DEBUG] reject continiue by API. Status: %d, Body: %s\n", response.HttpResponse.StatusCode, string(response.Body))
-			return fmt.Errorf("reject continiue by API")
-		} else {
-
-			for attempt := 1; attempt <= maxRetries; attempt++ {
-				g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
-					{"content-length", strconv.Itoa(len(dataSignup))},
-					{"rblx-challenge-metadata", metaBase64},
-					{"sec-ch-ua-platform", "\"Windows\""},
-					{"x-csrf-token", g.XCsrfToken},
-					{"sec-ch-ua", effectiveSecChUa},
-					{"rblx-challenge-id", UnifiedCaptchaId},
-					{"rblx-challenge-type", "captcha"},
-					{"sec-ch-ua-mobile", "?0"},
-					{"traceparent", g.Traceparent()},
-					{"user-agent", effectiveUA},
-					{"accept", "application/json, text/plain, */*"},
-					{"content-type", "application/json;charset=UTF-8"},
-					{"x-retry-attempt", "1"},
-					{"origin", "https://www.roblox.com"},
-					{"sec-fetch-site", "same-site"},
-					{"sec-fetch-mode", "cors"},
-					{"sec-fetch-dest", "empty"},
-					{"referer", "https://www.roblox.com/"},
-					{"accept-encoding", "gzip, deflate, br, zstd"},
-					{"accept-language", accept_language},
-				}
-
-				g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, g.Cookies...)
-
-				g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"priority", "u=1, i"})
-
-				response, err = g.DoRequest("POST", "https://auth.roblox.com/v2/signup?urlLocale=en_us&urlLocale=en_us", dataSignup)
-
-				if err != nil {
-					return fmt.Errorf("signup error")
-				}
-
-				if string(response.Body) == `{"code":0,"message":"Token Validation Failed"}` {
-					csrf := string(response.Header.Get("X-Csrf-Token"))
-					if csrf != "" {
-						g.XCsrfToken = csrf
+			newCsrf := response.Header.Get("X-Csrf-Token")
+			if response.HttpResponse.StatusCode == 403 && newCsrf != "" {
+				g.XCsrfToken = newCsrf
+				for i, h := range g.HttpClient.OrderedHeaders {
+					if strings.EqualFold(h[0], "x-csrf-token") {
+						g.HttpClient.OrderedHeaders[i][1] = newCsrf
+						break
 					}
-					continue
-				} else {
-					break
+				}
+				response, err = g.DoRequest("POST", "https://apis.roblox.com/challenge/v1/continue?urlLocale=en_us", body)
+				if err == nil && response.HttpResponse.StatusCode == 200 {
+					goto continueOK
 				}
 			}
-
-			return g.finalizeSignup(response, effectiveUA)
+			return fmt.Errorf("reject continiue by API")
 		}
+	continueOK:
+
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
+				{"content-length", strconv.Itoa(len(dataSignup))},
+				{"rblx-challenge-metadata", metaBase64},
+				{"sec-ch-ua-platform", "\"Windows\""},
+				{"x-csrf-token", g.XCsrfToken},
+				{"sec-ch-ua", effectiveSecChUa},
+				{"rblx-challenge-id", UnifiedCaptchaId},
+				{"rblx-challenge-type", outerChallengeType},
+				{"sec-ch-ua-mobile", "?0"},
+				{"traceparent", g.Traceparent()},
+				{"user-agent", effectiveUA},
+				{"accept", "application/json, text/plain, */*"},
+				{"content-type", "application/json;charset=UTF-8"},
+				{"x-retry-attempt", "1"},
+				{"origin", "https://www.roblox.com"},
+				{"sec-fetch-site", "same-site"},
+				{"sec-fetch-mode", "cors"},
+				{"sec-fetch-dest", "empty"},
+				{"referer", "https://www.roblox.com/"},
+				{"accept-encoding", "gzip, deflate, br, zstd"},
+				{"accept-language", accept_language},
+			}
+
+			g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, g.Cookies...)
+
+			g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"priority", "u=1, i"})
+
+			response, err = g.DoRequest("POST", "https://auth.roblox.com/v2/signup?urlLocale=en_us&urlLocale=en_us", dataSignup)
+
+			if err != nil {
+				return fmt.Errorf("signup error")
+			}
+
+			if string(response.Body) == `{"code":0,"message":"Token Validation Failed"}` {
+				csrf := string(response.Header.Get("X-Csrf-Token"))
+				if csrf != "" {
+					g.XCsrfToken = csrf
+				}
+				continue
+			} else {
+				break
+			}
+		}
+
+		return g.finalizeSignup(response, effectiveUA)
 
 	} else if response.HttpResponse.StatusCode == 200 && response.Header.Get("set-cookie") != "" {
 		// Roblox sometimes grants signup with no Arkose challenge at all

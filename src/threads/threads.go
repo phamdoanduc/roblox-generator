@@ -2,6 +2,7 @@ package main
 
 import (
 	"RobloxRegister/src/internal/helpers/class"
+	"RobloxRegister/src/internal/helpers/utils"
 	"RobloxRegister/src/internal/register"
 
 	"context"
@@ -52,8 +53,11 @@ func main() {
 					if !ok {
 						return
 					}
+					
+					// Lấy ngẫu nhiên proxy từ file
+					proxyStr := utils.GetProxy()
 
-					okRes := register.RegistrationProcess(cfg.Captcha, id)
+					okRes := register.RegistrationProcess(cfg.Captcha, id, proxyStr)
 					if okRes {
 						if atomic.AddInt64(&successCount, 1) >= int64(cfg.Register.Limit_Accounts) {
 							cancel()
