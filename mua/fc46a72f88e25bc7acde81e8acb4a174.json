@@ -1,0 +1,403 @@
+[
+  {
+    "key": "api_type",
+    "value": "js"
+  },
+  {
+    "key": "f",
+    "value": "fc46a72f88e25bc7acde81e8acb4a174"
+  },
+  {
+    "key": "n",
+    "value": "MTc4MTQ0MjI3Ng=="
+  },
+  {
+    "key": "wh",
+    "value": "917e0badef4c55b8513c6b83d51be9e3|1d99c2530fa1a96e676f9b1a1a9bcb58"
+  },
+  {
+    "key": "enhanced_fp",
+    "value": [
+      {
+        "key": "webgl_extensions",
+        "value": "ANGLE_instanced_arrays;EXT_blend_minmax;EXT_clip_control;EXT_color_buffer_half_float;EXT_depth_clamp;EXT_frag_depth;EXT_polygon_offset_clamp;EXT_shader_texture_lod;EXT_texture_filter_anisotropic;EXT_texture_mirror_clamp_to_edge;EXT_sRGB;KHR_parallel_shader_compile;OES_element_index_uint;OES_fbo_render_mipmap;OES_standard_derivatives;OES_texture_float;OES_texture_half_float;OES_texture_half_float_linear;OES_vertex_array_object;WEBGL_blend_func_extended;WEBGL_color_buffer_float;WEBGL_compressed_texture_astc;WEBGL_compressed_texture_etc;WEBGL_compressed_texture_etc1;WEBGL_compressed_texture_pvrtc;WEBKIT_WEBGL_compressed_texture_pvrtc;WEBGL_debug_renderer_info;WEBGL_debug_shaders;WEBGL_depth_texture;WEBGL_draw_buffers;WEBGL_lose_context;WEBGL_multi_draw;WEBGL_polygon_mode"
+      },
+      {
+        "key": "webgl_extensions_hash",
+        "value": "b9305a4cc5ac1ccff2c39ed3c518c526"
+      },
+      {
+        "key": "webgl_renderer",
+        "value": "WebKit WebGL"
+      },
+      {
+        "key": "webgl_vendor",
+        "value": "WebKit"
+      },
+      {
+        "key": "webgl_version",
+        "value": "WebGL 1.0"
+      },
+      {
+        "key": "webgl_shading_language_version",
+        "value": "WebGL GLSL ES 1.0 (1.0)"
+      },
+      {
+        "key": "webgl_aliased_line_width_range",
+        "value": "[1, 1]"
+      },
+      {
+        "key": "webgl_aliased_point_size_range",
+        "value": "[1, 511]"
+      },
+      {
+        "key": "webgl_antialiasing",
+        "value": "yes"
+      },
+      {
+        "key": "webgl_bits",
+        "value": "8,8,24,8,8,0"
+      },
+      {
+        "key": "webgl_max_params",
+        "value": "16,32,16384,1024,16384,16,16384,31,16,16,1024"
+      },
+      {
+        "key": "webgl_max_viewport_dims",
+        "value": "[16384, 16384]"
+      },
+      {
+        "key": "webgl_unmasked_vendor",
+        "value": "Apple Inc."
+      },
+      {
+        "key": "webgl_unmasked_renderer",
+        "value": "Apple GPU"
+      },
+      {
+        "key": "webgl_vsf_params",
+        "value": "23,127,127,23,127,127,23,127,127"
+      },
+      {
+        "key": "webgl_vsi_params",
+        "value": "0,31,30,0,31,30,0,31,30"
+      },
+      {
+        "key": "webgl_fsf_params",
+        "value": "23,127,127,23,127,127,23,127,127"
+      },
+      {
+        "key": "webgl_fsi_params",
+        "value": "0,31,30,0,31,30,0,31,30"
+      },
+      {
+        "key": "webgl_hash_webgl",
+        "value": "043655d7b08c8271698b0e0ba5ce4b6b"
+      },
+      {
+        "key": "user_agent_data_brands",
+        "value": null
+      },
+      {
+        "key": "user_agent_data_mobile",
+        "value": null
+      },
+      {
+        "key": "navigator_connection_downlink",
+        "value": null
+      },
+      {
+        "key": "navigator_connection_downlink_max",
+        "value": null
+      },
+      {
+        "key": "network_info_rtt",
+        "value": null
+      },
+      {
+        "key": "network_info_save_data",
+        "value": null
+      },
+      {
+        "key": "network_info_rtt_type",
+        "value": null
+      },
+      {
+        "key": "screen_pixel_depth",
+        "value": 24
+      },
+      {
+        "key": "navigator_device_memory",
+        "value": null
+      },
+      {
+        "key": "navigator_languages",
+        "value": "en-GB"
+      },
+      {
+        "key": "window_inner_width",
+        "value": 0
+      },
+      {
+        "key": "window_inner_height",
+        "value": 0
+      },
+      {
+        "key": "window_outer_width",
+        "value": 414
+      },
+      {
+        "key": "window_outer_height",
+        "value": 896
+      },
+      {
+        "key": "browser_detection_firefox",
+        "value": false
+      },
+      {
+        "key": "browser_detection_brave",
+        "value": false
+      },
+      {
+        "key": "f58835f",
+        "value": "93bddf79840fc8347d8953db6563b0be"
+      },
+      {
+        "key": "browser_object_checks",
+        "value": null
+      },
+      {
+        "key": "29s83ih9",
+        "value": "68934a3e9455fa72420237eb05902327⁣"
+      },
+      {
+        "key": "audio_codecs",
+        "value": "{\"ogg\":\"probably\",\"mp3\":\"maybe\",\"wav\":\"probably\",\"m4a\":\"maybe\",\"aac\":\"maybe\"}"
+      },
+      {
+        "key": "audio_codecs_extended_hash",
+        "value": "e59ea13c844d414ebfb7c926baad28da"
+      },
+      {
+        "key": "video_codecs",
+        "value": "{\"ogg\":\"\",\"h264\":\"probably\",\"webm\":\"probably\",\"mpeg4v\":\"probably\",\"mpeg4a\":\"probably\",\"theora\":\"\"}"
+      },
+      {
+        "key": "video_codecs_extended_hash",
+        "value": "8b9f3cee8b9ec25e9e482e19c7523ad7"
+      },
+      {
+        "key": "media_query_dark_mode",
+        "value": true
+      },
+      {
+        "key": "f9bf2db",
+        "value": "{\"pc\":\"no-preference\",\"ah\":\"none\",\"ap\":\"coarse\",\"p\":\"coarse\",\"h\":\"none\",\"u\":\"fast\",\"ic\":\"none\",\"prm\":\"no-preference\",\"s\":\"enabled\",\"fc\":\"none\"}"
+      },
+      {
+        "key": "headless_browser_phantom",
+        "value": false
+      },
+      {
+        "key": "headless_browser_selenium",
+        "value": false
+      },
+      {
+        "key": "headless_browser_nightmare_js",
+        "value": false
+      },
+      {
+        "key": "862f2c1",
+        "value": 4
+      },
+      {
+        "key": "1l2l5234ar2",
+        "value": "1781442275837⁣"
+      },
+      {
+        "key": "document__referrer",
+        "value": "https://fullvideos.co/"
+      },
+      {
+        "key": "window__ancestor_origins",
+        "value": [
+          "https://fullvideos.co"
+        ]
+      },
+      {
+        "key": "window__tree_index",
+        "value": [
+          0
+        ]
+      },
+      {
+        "key": "window__tree_structure",
+        "value": "[[]]"
+      },
+      {
+        "key": "window__location_href",
+        "value": "https://xn--80a7adb.xn--h1aaf0ab0e.xn--e1a4c/client-api.arkoselabs.com/v2/enforcement.html"
+      },
+      {
+        "key": "client_config__sitedata_location_href",
+        "value": "https://fullvideos.co/"
+      },
+      {
+        "key": "client_config__language",
+        "value": "en-GB"
+      },
+      {
+        "key": "client_config__surl",
+        "value": "https://xn--80a7adb.xn--h1aaf0ab0e.xn--e1a4c/client-api.arkoselabs.com"
+      },
+      {
+        "key": "c8480e29a",
+        "value": "18aa6c2a74df99fa658083bb95bb39df⁢"
+      },
+      {
+        "key": "client_config__triggered_inline",
+        "value": false
+      },
+      {
+        "key": "mobile_sdk__is_sdk",
+        "value": false
+      },
+      {
+        "key": "audio_fingerprint",
+        "value": "124.04346622781304"
+      },
+      {
+        "key": "navigator_battery_charging",
+        "value": null
+      },
+      {
+        "key": "7541c2s",
+        "value": "d751713988987e9331980363e24189ce"
+      },
+      {
+        "key": "1f220c9",
+        "value": "c1b2713923c58b630077c231f847b005"
+      },
+      {
+        "key": "math_fingerprint",
+        "value": "8766a738576bd8e1b4920ed724677cfe"
+      },
+      {
+        "key": "supported_math_functions",
+        "value": "ae28c72a571a53d677827abe3a5a83a7"
+      },
+      {
+        "key": "3f76dd27",
+        "value": "portrait-primary"
+      },
+      {
+        "key": "5dd48ca0",
+        "value": 1
+      },
+      {
+        "key": "4b4b269e68",
+        "value": "c0b22e24-1406-4a0a-a0d6-d6458414142c"
+      },
+      {
+        "key": "6a62b2a558",
+        "value": "f845a08949c076f42e09da2c4b7496a6"
+      },
+      {
+        "key": "is_keyless",
+        "value": false
+      },
+      {
+        "key": "c2d2015",
+        "value": "823f50bdde40d0386d8f3823e9158b2d"
+      },
+      {
+        "key": "43f2d94",
+        "value": []
+      },
+      {
+        "key": "20c15922",
+        "value": false
+      },
+      {
+        "key": "4f59ca8",
+        "value": 0
+      },
+      {
+        "key": "3ea7194",
+        "value": {
+          "isHDR": true,
+          "formats": [],
+          "supported": false
+        }
+      },
+      {
+        "key": "05d3d24",
+        "value": "73f009ac2a776fcde31d63b2e1899b1d"
+      },
+      {
+        "key": "speech_default_voice",
+        "value": "Piya || bn-IN"
+      },
+      {
+        "key": "speech_voices_hash",
+        "value": "5b48857d8600df2aae1afabd526e81ea"
+      },
+      {
+        "key": "83eb055",
+        "value": "68934a3e9455fa72420237eb05902327"
+      },
+      {
+        "key": "4ca87df3d1",
+        "value": "Ow=="
+      },
+      {
+        "key": "867e25e5d4",
+        "value": "Ow=="
+      },
+      {
+        "key": "d4a306884c",
+        "value": "Ow=="
+      }
+    ]
+  },
+  {
+    "key": "fe",
+    "value": [
+      "DNT:unknown",
+      "L:en-GB",
+      "D:24",
+      "PR:2",
+      "S:896,414",
+      "AS:896,414",
+      "TO:-660",
+      "SS:true",
+      "LS:true",
+      "IDB:true",
+      "B:false",
+      "ODB:false",
+      "CPUC:unknown",
+      "PK:iPhone",
+      "CFP:-962008548",
+      "FR:false",
+      "FOS:false",
+      "FB:false",
+      "JSF:Arial,Arial Hebrew,Arial Rounded MT Bold,Courier,Courier New,Georgia,Helvetica,Helvetica Neue,Impact,Palatino,Times,Times New Roman,Trebuchet MS,Verdana",
+      "P:Chrome PDF Viewer,Chromium PDF Viewer,Microsoft Edge PDF Viewer,PDF Viewer,WebKit built-in PDF",
+      "T:5,true,true",
+      "H:4",
+      "SWF:false"
+    ]
+  },
+  {
+    "key": "ife_hash",
+    "value": "6b052a03cff2821539b38452551f8718"
+  },
+  {
+    "key": "jsbd",
+    "value": "{\"HL\":1,\"NCE\":true,\"DT\":\"\",\"NWD\":\"false\",\"DMTO\":1,\"DOTO\":1}"
+  },
+  {
+    "key": "user_agent",
+    "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1"
+  }
+]

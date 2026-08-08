@@ -1,0 +1,406 @@
+[
+  {
+    "key": "api_type",
+    "value": "js"
+  },
+  {
+    "key": "f",
+    "value": "86888a723223c3490d420c3f9ad4be67"
+  },
+  {
+    "key": "n",
+    "value": "MTc1NTI1OTI4NQ=="
+  },
+  {
+    "key": "wh",
+    "value": "4fff464341bd3756deb341a73b882e90|72627afbfd19a741c7da1732218301ac"
+  },
+  {
+    "key": "enhanced_fp",
+    "value": [
+      {
+        "key": "webgl_extensions",
+        "value": "ANGLE_instanced_arrays;EXT_blend_minmax;EXT_float_blend;EXT_texture_filter_anisotropic;EXT_sRGB;OES_element_index_uint;OES_fbo_render_mipmap;OES_standard_derivatives;OES_texture_float_linear;OES_vertex_array_object;WEBGL_compressed_texture_astc;WEBGL_compressed_texture_etc;WEBGL_compressed_texture_etc1;WEBGL_debug_renderer_info;WEBGL_debug_shaders;WEBGL_depth_texture;WEBGL_lose_context;WEBGL_multi_draw"
+      },
+      {
+        "key": "webgl_extensions_hash",
+        "value": "9b1c7af5b46900effd650896011a7f31"
+      },
+      {
+        "key": "webgl_renderer",
+        "value": "WebKit WebGL"
+      },
+      {
+        "key": "webgl_vendor",
+        "value": "WebKit"
+      },
+      {
+        "key": "webgl_version",
+        "value": "WebGL 1.0 (OpenGL ES 2.0 Chromium)"
+      },
+      {
+        "key": "webgl_shading_language_version",
+        "value": "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)"
+      },
+      {
+        "key": "webgl_aliased_line_width_range",
+        "value": "[1, 4095.9375]"
+      },
+      {
+        "key": "webgl_aliased_point_size_range",
+        "value": "[1, 1024]"
+      },
+      {
+        "key": "webgl_antialiasing",
+        "value": "yes"
+      },
+      {
+        "key": "webgl_bits",
+        "value": "8,8,24,8,8,0"
+      },
+      {
+        "key": "webgl_max_params",
+        "value": "16,96,4096,4096,16383,16,4096,31,32,16,4096"
+      },
+      {
+        "key": "webgl_max_viewport_dims",
+        "value": "[16383, 16383]"
+      },
+      {
+        "key": "webgl_unmasked_vendor",
+        "value": "ARM"
+      },
+      {
+        "key": "webgl_unmasked_renderer",
+        "value": "Mali-G68 MC4"
+      },
+      {
+        "key": "webgl_vsf_params",
+        "value": "23,127,127,10,15,15,10,15,15"
+      },
+      {
+        "key": "webgl_vsi_params",
+        "value": "0,31,30,0,15,14,0,15,14"
+      },
+      {
+        "key": "webgl_fsf_params",
+        "value": "23,127,127,10,15,15,10,15,15"
+      },
+      {
+        "key": "webgl_fsi_params",
+        "value": "0,31,30,0,15,14,0,15,14"
+      },
+      {
+        "key": "webgl_hash_webgl",
+        "value": "65b3072fc073c87ec8fd05db99d47e27"
+      },
+      {
+        "key": "user_agent_data_brands",
+        "value": "Not?A_Brand,Samsung Internet,Chromium"
+      },
+      {
+        "key": "user_agent_data_mobile",
+        "value": true
+      },
+      {
+        "key": "navigator_connection_downlink",
+        "value": 10
+      },
+      {
+        "key": "navigator_connection_downlink_max",
+        "value": -1
+      },
+      {
+        "key": "network_info_rtt",
+        "value": null
+      },
+      {
+        "key": "network_info_save_data",
+        "value": false
+      },
+      {
+        "key": "network_info_rtt_type",
+        "value": "wifi"
+      },
+      {
+        "key": "screen_pixel_depth",
+        "value": 24
+      },
+      {
+        "key": "navigator_device_memory",
+        "value": 4
+      },
+      {
+        "key": "navigator_languages",
+        "value": "en-AU,en-GB,en-US,en"
+      },
+      {
+        "key": "window_inner_width",
+        "value": 0
+      },
+      {
+        "key": "window_inner_height",
+        "value": 0
+      },
+      {
+        "key": "window_outer_width",
+        "value": 384
+      },
+      {
+        "key": "window_outer_height",
+        "value": 659
+      },
+      {
+        "key": "browser_detection_firefox",
+        "value": false
+      },
+      {
+        "key": "browser_detection_brave",
+        "value": false
+      },
+      {
+        "key": "f58835f",
+        "value": "69557db2b255323059038c7d1e0f93f3"
+      },
+      {
+        "key": "browser_object_checks",
+        "value": "554838a8451ac36cb977e719e9d6623c"
+      },
+      {
+        "key": "29s83ih9",
+        "value": "68934a3e9455fa72420237eb05902327⁣"
+      },
+      {
+        "key": "audio_codecs",
+        "value": "{\"ogg\":\"probably\",\"mp3\":\"probably\",\"wav\":\"probably\",\"m4a\":\"maybe\",\"aac\":\"probably\"}"
+      },
+      {
+        "key": "audio_codecs_extended_hash",
+        "value": "805036349642e2569ec299baed02315b"
+      },
+      {
+        "key": "video_codecs",
+        "value": "{\"ogg\":\"\",\"h264\":\"probably\",\"webm\":\"probably\",\"mpeg4v\":\"\",\"mpeg4a\":\"\",\"theora\":\"\"}"
+      },
+      {
+        "key": "video_codecs_extended_hash",
+        "value": "5648501a58d24ea22ce3773cc234e563"
+      },
+      {
+        "key": "media_query_dark_mode",
+        "value": false
+      },
+      {
+        "key": "f9bf2db",
+        "value": "{\"pc\":\"no-preference\",\"ah\":\"hover\",\"ap\":\"coarse\",\"p\":\"coarse\",\"h\":\"hover\",\"u\":\"fast\",\"prm\":\"no-preference\",\"prt\":\"no-preference\",\"s\":\"enabled\",\"fc\":\"none\"}"
+      },
+      {
+        "key": "headless_browser_phantom",
+        "value": false
+      },
+      {
+        "key": "headless_browser_selenium",
+        "value": false
+      },
+      {
+        "key": "headless_browser_nightmare_js",
+        "value": false
+      },
+      {
+        "key": "862f2c1",
+        "value": 4
+      },
+      {
+        "key": "1l2l5234ar2",
+        "value": "1755259284596⁣"
+      },
+      {
+        "key": "document__referrer",
+        "value": "https://short.secretexploits.xyz/"
+      },
+      {
+        "key": "window__ancestor_origins",
+        "value": [
+          "https://short.secretexploits.xyz"
+        ]
+      },
+      {
+        "key": "window__tree_index",
+        "value": [
+          1
+        ]
+      },
+      {
+        "key": "window__tree_structure",
+        "value": "[[],[],[],[]]"
+      },
+      {
+        "key": "window__location_href",
+        "value": "https://xn--80a7adb.xn--h1aaf0ab0e.xn--e1a4c/client-api.arkoselabs.com/v2/enforcement.html"
+      },
+      {
+        "key": "client_config__sitedata_location_href",
+        "value": "https://short.secretexploits.xyz/"
+      },
+      {
+        "key": "client_config__language",
+        "value": "en-AU"
+      },
+      {
+        "key": "client_config__surl",
+        "value": "https://xn--80a7adb.xn--h1aaf0ab0e.xn--e1a4c/client-api.arkoselabs.com"
+      },
+      {
+        "key": "c8480e29a",
+        "value": "18aa6c2a74df99fa658083bb95bb39df⁢"
+      },
+      {
+        "key": "client_config__triggered_inline",
+        "value": false
+      },
+      {
+        "key": "mobile_sdk__is_sdk",
+        "value": false
+      },
+      {
+        "key": "audio_fingerprint",
+        "value": "124.08072627604997"
+      },
+      {
+        "key": "navigator_battery_charging",
+        "value": false
+      },
+      {
+        "key": "7541c2s",
+        "value": "199eba60310b53c200cc783906883c67"
+      },
+      {
+        "key": "1f220c9",
+        "value": "4af892e117ea0a3a9a2f076c9691d018"
+      },
+      {
+        "key": "math_fingerprint",
+        "value": "3b2ff195f341257a6a2abbc122f4ae67"
+      },
+      {
+        "key": "supported_math_functions",
+        "value": "e9dd4fafb44ee489f48f7c93d0f48163"
+      },
+      {
+        "key": "3f76dd27",
+        "value": "portrait-primary"
+      },
+      {
+        "key": "5dd48ca0",
+        "value": 5
+      },
+      {
+        "key": "4b4b269e68",
+        "value": "7e297e5e-bb34-44d2-9293-2ac897c57540"
+      },
+      {
+        "key": "6a62b2a558",
+        "value": "f845a08949c076f42e09da2c4b7496a6"
+      },
+      {
+        "key": "is_keyless",
+        "value": false
+      },
+      {
+        "key": "c2d2015",
+        "value": "29d13b1af8803cb86c2697345d7ea9eb"
+      },
+      {
+        "key": "43f2d94",
+        "value": []
+      },
+      {
+        "key": "20c15922",
+        "value": true
+      },
+      {
+        "key": "4f59ca8",
+        "value": null
+      },
+      {
+        "key": "3ea7194",
+        "value": {
+          "isHDR": false,
+          "formats": [
+            "HDR10",
+            "HLG"
+          ],
+          "supported": true
+        }
+      },
+      {
+        "key": "05d3d24",
+        "value": "dec9f02639a6b4af264a4763a0ce39a0"
+      },
+      {
+        "key": "speech_default_voice",
+        "value": null
+      },
+      {
+        "key": "speech_voices_hash",
+        "value": null
+      },
+      {
+        "key": "83eb055",
+        "value": "68934a3e9455fa72420237eb05902327"
+      },
+      {
+        "key": "4ca87df3d1",
+        "value": "Ow=="
+      },
+      {
+        "key": "867e25e5d4",
+        "value": "Ow=="
+      },
+      {
+        "key": "d4a306884c",
+        "value": "Ow=="
+      }
+    ]
+  },
+  {
+    "key": "fe",
+    "value": [
+      "DNT:unknown",
+      "L:en-AU",
+      "D:24",
+      "PR:2.8125",
+      "S:659,384",
+      "AS:659,384",
+      "TO:-600",
+      "SS:true",
+      "LS:true",
+      "IDB:true",
+      "B:false",
+      "ODB:true",
+      "CPUC:unknown",
+      "PK:Linux armv81",
+      "CFP:636928748",
+      "FR:false",
+      "FOS:false",
+      "FB:false",
+      "JSF:Arial,Courier,Courier New,Georgia,Helvetica,Monaco,Palatino,Tahoma,Times,Times New Roman,Verdana",
+      "P:",
+      "T:5,true,true",
+      "H:8",
+      "SWF:false"
+    ]
+  },
+  {
+    "key": "ife_hash",
+    "value": "45e167886b463a93ff4d723b5ab8c7e8"
+  },
+  {
+    "key": "jsbd",
+    "value": "{\"HL\":1,\"NCE\":true,\"DT\":\"\",\"NWD\":\"false\",\"DMTO\":1,\"DOTO\":1}"
+  },
+  {
+    "key": "user_agent",
+    "value": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/28.0 Chrome/130.0.0.0 Mobile Safari/537.36"
+  }
+]

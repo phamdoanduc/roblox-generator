@@ -36,7 +36,7 @@ const (
 )
 
 func debugLog(format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, "[FUNCAPTCHA] "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "[SOLVE] "+format+"\n", args...)
 }
 
 // redactProxy strips embedded user:pass credentials before logging, since

@@ -2,8 +2,8 @@ settings_captcha:
   api_key: "b051743e-30ae-47dc-9213-3b50c430ea7b"
   provider: "netz"
   http_version: "HTTP2"
-  browser_version: "Chrome133"
+  browser_version: "Chrome148"
   solve_pow: true
 settings_register:
-  threads: 3
-  limit_accounts: 5
+  threads: 1
+  limit_accounts: 3

@@ -84,23 +84,28 @@ func e8() string {
 }
 
 func GetProxy() string {
+	mu.Lock()
+	if len(proxies) == 0 {
+		mu.Unlock()
+		return ""
+	}
 	p := proxies[rand.Intn(len(proxies))]
-	
-	// Normalize the proxy string by removing the protocol prefix if present
-	p = strings.TrimPrefix(p, "http://")
-	p = strings.TrimPrefix(p, "https://")
-	
+	mu.Unlock()
+
+	p = strings.TrimSpace(p)
+	if strings.EqualFold(p, "direct") || strings.EqualFold(p, "none") {
+		return ""
+	}
+	if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") || strings.HasPrefix(p, "socks5://") {
+		return p
+	}
+
 	parts := strings.Split(p, ":")
 	if len(parts) == 4 {
 		// format is host:port:user:pass
 		return fmt.Sprintf("http://%s:%s@%s:%s", parts[2], parts[3], parts[0], parts[1])
 	}
-	
-	// For other formats (e.g. host:port, or already formatted user:pass@host:port)
-	if !strings.HasPrefix(p, "http://") && !strings.HasPrefix(p, "https://") && !strings.HasPrefix(p, "socks") {
-		p = "http://" + p
-	}
-	return p
+	return "http://" + p
 }
 
 func GenerateSecureAuth(serverNonce string) (*class.SecureAuth, error) {

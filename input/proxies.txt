@@ -1,12 +1,1 @@
-protocol://user:pass@host:port
-protocol://user:pass@host:port
-protocol://user:pass@host:port
-protocol://user:pass@host:port
-protocol://user:pass@host:port
-protocol://user:pass@host:port
-protocol://user:pass@host:port
-protocol://user:pass@host:port
-protocol://user:pass@host:port
-protocol://user:pass@host:port
-protocol://user:pass@host:port
-protocol://user:pass@host:port
+http://twolien:367367@103.252.92.170:36026
