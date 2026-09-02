@@ -82,8 +82,16 @@ const (
 	accept_language = "en-US,en;q=0.9"
 )
 
+func secChUAForUA(ua string) string {
+	if m := regexp.MustCompile(`Chrome/(\d+)`).FindStringSubmatch(ua); len(m) > 1 {
+		ver := m[1]
+		return fmt.Sprintf(`"Not A(Brand";v="99", "Chromium";v="%s", "Google Chrome";v="%s"`, ver, ver)
+	}
+	return sec_ch_ua
+}
+
 func isTLSConsistentUA(ua string) bool {
-	return strings.Contains(ua, "Chrome/145.") || strings.Contains(ua, "Chrome/146.") || strings.Contains(ua, "Chrome/148.")
+	return strings.Contains(ua, "Chrome/")
 }
 
 // EnsureStickyProxy pins a DataImpulse proxy to one exit IP for the lifetime
@@ -931,9 +939,7 @@ func (g *Container) SignUp() error {
 
 		if token.UserAgent != "" && isTLSConsistentUA(token.UserAgent) {
 			effectiveUA = token.UserAgent
-			if strings.Contains(effectiveUA, "Chrome/148.") && token.SecChUa == "" {
-				effectiveSecChUa = `"Not/A)Brand";v="99", "Chromium";v="148", "Google Chrome";v="148"`
-			}
+			effectiveSecChUa = secChUAForUA(effectiveUA)
 		}
 		if token.SecChUa != "" {
 			effectiveSecChUa = token.SecChUa
