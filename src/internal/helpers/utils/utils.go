@@ -15,6 +15,7 @@ import (
 	"log"
 	"math/big"
 	"math/rand"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -108,12 +109,7 @@ func GetProxy() string {
 	return "http://" + p
 }
 
-func GenerateSecureAuth(serverNonce string) (*class.SecureAuth, error) {
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), randa.Reader)
-	if err != nil {
-		return nil, err
-	}
-
+func GenerateSecureAuth(privateKey *ecdsa.PrivateKey, serverNonce string) (*class.SecureAuth, error) {
 	pubBytes, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
 	if err != nil {
 		return nil, err
@@ -149,6 +145,41 @@ func GenerateSecureAuth(serverNonce string) (*class.SecureAuth, error) {
 		ServerNonce:          serverNonce,
 		SaiSignature:         saiSignature,
 	}, nil
+}
+
+func GenerateBoundAuthToken(privateKey *ecdsa.PrivateKey, method, fullURL string, body []byte) (string, error) {
+	h := sha256.Sum256(body)
+	bodyHash := base64.StdEncoding.EncodeToString(h[:])
+
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+
+	u, err := url.Parse(fullURL)
+	if err != nil {
+		return "", err
+	}
+	path := u.Path
+
+	// sig1 payload: `${bodyHash}|${ts}|${fullURL}|${METHOD}`
+	sig1Payload := fmt.Sprintf("%s|%s|%s|%s", bodyHash, ts, fullURL, strings.ToUpper(method))
+	hash1 := sha256.Sum256([]byte(sig1Payload))
+	r1, s1, err := ecdsa.Sign(randa.Reader, privateKey, hash1[:])
+	if err != nil {
+		return "", err
+	}
+	rawSig1 := rawP1363Signature(r1, s1, elliptic.P256())
+	sig1B64 := base64.StdEncoding.EncodeToString(rawSig1)
+
+	// sig2 payload: `|${ts}|${path}|${METHOD}`
+	sig2Payload := fmt.Sprintf("|%s|%s|%s", ts, path, strings.ToUpper(method))
+	hash2 := sha256.Sum256([]byte(sig2Payload))
+	r2, s2, err := ecdsa.Sign(randa.Reader, privateKey, hash2[:])
+	if err != nil {
+		return "", err
+	}
+	rawSig2 := rawP1363Signature(r2, s2, elliptic.P256())
+	sig2B64 := base64.StdEncoding.EncodeToString(rawSig2)
+
+	return fmt.Sprintf("v1|%s|%s|%s|%s", bodyHash, ts, sig1B64, sig2B64), nil
 }
 
 // NewTraceID returns a fresh W3C trace-id, meant to be generated once per
@@ -258,7 +289,13 @@ func rgbGradient(r1, g1, b1, r2, g2, b2, n int) [][3]int {
 	return gradient
 }
 
+var IsDebugEnabled bool = false
+
 func Output(msgType, msg string) {
+	if msgType == "DEBUG" && !IsDebugEnabled {
+		return
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
 

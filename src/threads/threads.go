@@ -31,6 +31,8 @@ func main() {
 		panic(err)
 	}
 
+	utils.IsDebugEnabled = cfg.Register.Debug
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

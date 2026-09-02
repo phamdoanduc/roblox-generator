@@ -1,88 +1,136 @@
-"""
-Validation-test tool (not part of production flow).
-
-Opens a REAL Chrome browser through a given proxy, visits the same page the
-Go client warms up on (www.roblox.com), lets PerimeterX/Arkose JS run for a
-few seconds, then dumps the resulting cookies to a JSON file that
-register.go's loadPrimedCookies() can pick up via the PRIMED_COOKIES_FILE
-env var.
-
-Goal: find out whether a real-browser-obtained trust cookie (vs. one minted
-purely from azuretls's TLS fingerprint) changes registration outcome, and how
-much dwell time PerimeterX actually needs before it upgrades trust.
-
-Usage:
-    python prime_cookies.py --proxy-index 0 --dwell 5 --out primed_cookies.json
-
-Never print cookie VALUES to stdout -- only names -- these are live session
-tokens.
-"""
-
-import argparse
-import json
+import asyncio
 import os
-from urllib.parse import urlparse
+import sys
+import json
+import random
+import string
+import urllib.parse
+import argparse
+from playwright.async_api import async_playwright
 
-from playwright.sync_api import sync_playwright
+# Helper to generate smooth mouse movements (Bezier curve emulation)
+async def move_mouse_smoothly(page, start_x, start_y, end_x, end_y, steps=20):
+    for i in range(steps):
+        t = i / steps
+        # Simple quadratic Bezier curve
+        cx = (1 - t) * (1 - t) * start_x + 2 * (1 - t) * t * (start_x + end_x) / 2 + t * t * end_x
+        cy = (1 - t) * (1 - t) * start_y + 2 * (1 - t) * t * (start_y + end_y) / 2 + t * t * end_y
+        await page.mouse.move(cx, cy)
+        await asyncio.sleep(random.uniform(0.01, 0.03))
 
-WATCH_DOMAINS = ("roblox.com", "arkoselabs.com", "funcaptcha.com")
+async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--proxy", type=str, help="Proxy string to use (http://user:pass@host:port)")
+    parser.add_argument("--output", type=str, default="primed_cookies.json", help="Output JSON path")
+    args = parser.parse_args()
 
+    proxy = args.proxy
+    if proxy in ["none", "direct", ""]:
+        proxy = None
+    elif not proxy:
+        # Load user proxies as fallback
+        proxy_path = r"D:\codev1\Tool Roblox\Roblox Account Generator\roblox-generator-netz\input\proxies.txt"
+        if os.path.exists(proxy_path):
+            with open(proxy_path, "r") as f:
+                lines = [l.strip() for l in f if l.strip()]
+                if lines:
+                    proxy = random.choice(lines)
+    
+    playwright_proxy = None
+    if proxy:
+        if not proxy.startswith('http') and not proxy.startswith('socks5'):
+            proxy = 'http://' + proxy
+        parsed = urllib.parse.urlparse(proxy)
+        playwright_proxy = {
+            "server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}",
+        }
+        if parsed.username:
+            playwright_proxy["username"] = parsed.username
+        if parsed.password:
+            playwright_proxy["password"] = parsed.password
 
-def load_proxy(index: int) -> dict:
-    path = os.path.join(os.path.dirname(__file__), "input", "proxies.txt")
-    with open(path, "r", encoding="utf-8") as f:
-        lines = [l.strip() for l in f if l.strip()]
-    raw = lines[index]
-    parsed = urlparse(raw)
-    proxy = {"server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"}
-    if parsed.username:
-        proxy["username"] = parsed.username
-    if parsed.password:
-        proxy["password"] = parsed.password
-    return proxy
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--proxy-index", type=int, default=0)
-    ap.add_argument("--dwell", type=float, default=5.0, help="seconds to wait on the page before reading cookies")
-    ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "primed_cookies.json"))
-    ap.add_argument("--url", default="https://www.roblox.com/")
-    ap.add_argument("--headless", action="store_true", help="run headless (default: headed, real Chrome)")
-    args = ap.parse_args()
-
-    proxy = load_proxy(args.proxy_index)
-    print(f"[*] Using proxy server: {proxy['server']} (session pinned by proxy provider)")
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(channel="chrome", headless=args.headless, proxy=proxy)
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 800},
-            locale="en-US",
+    async with async_playwright() as p:
+        print(f"[PRIMER] Launching browser with proxy: {proxy}")
+        browser = await p.chromium.launch(
+            headless=False,
+            proxy=playwright_proxy,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-web-security",
+                "--disable-features=UserAgentClientHint",
+                "--disable-features=WebRtcHideLocalIpsWithMdns"
+            ]
         )
-        page = context.new_page()
-        print(f"[*] Navigating to {args.url} ...")
-        page.goto(args.url, wait_until="load", timeout=30000)
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.7778.96 Safari/537.36",
+            viewport={"width": 1280, "height": 800}
+        )
+        page = await context.new_page()
+        # Clean custom stealth init script
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            delete window.RTCPeerConnection;
+            delete window.webkitRTCPeerConnection;
+        """)
+        
+        print("[PRIMER] Navigating to Roblox.com/CreateAccount...")
+        await page.goto("https://www.roblox.com/CreateAccount", timeout=25000, wait_until="load")
+        
+        print("[PRIMER] Simulating human interactions (warming up PerimeterX)...")
+        # Scroll up and down
+        await page.evaluate("window.scrollTo(0, 400)")
+        await asyncio.sleep(random.uniform(0.5, 1.0))
+        await page.evaluate("window.scrollTo(0, 0)")
+        
+        # Emulate smooth mouse movements
+        for _ in range(5):
+            x1, y1 = random.randint(100, 500), random.randint(100, 500)
+            x2, y2 = random.randint(600, 1000), random.randint(400, 700)
+            await move_mouse_smoothly(page, x1, y1, x2, y2, steps=15)
+            await asyncio.sleep(random.uniform(0.3, 0.8))
 
-        print(f"[*] Dwelling {args.dwell}s to let PerimeterX/Arkose sensor JS run ...")
-        page.wait_for_timeout(int(args.dwell * 1000))
+        # Focus random fields or hover elements
+        try:
+            # Hover over a logo or text block to simulate engagement
+            await page.hover("a.logo", timeout=3000)
+        except Exception:
+            pass
 
-        cookies = context.cookies()
-        matched = [c for c in cookies if any(d in c["domain"] for d in WATCH_DOMAINS)]
+        print("[PRIMER] Taking screenshot of the page...")
+        ss_path = r"C:\Users\my PC\.gemini\antigravity\brain\c8b036c0-0660-48c1-8d94-869e8bd07294\scratch\primer_roblox.png"
+        await page.screenshot(path=ss_path)
+        print(f"[PRIMER] Screenshot saved: {ss_path}")
 
-        primed = {}
-        for c in matched:
-            primed[c["name"]] = c["value"]
+        print("[PRIMER] Waiting for PerimeterX token computation to finish...")
+        await asyncio.sleep(8)
+        
+        # Extract cookies
+        cookies_list = await context.cookies()
+        cookies_map = {}
+        target_cookies = ["GuestData"]
+        
+        print("[PRIMER] ALL Extracted Cookies:")
+        for c in cookies_list:
+            print(f"  - {c['name']}: {c['value'][:25]}...")
+            if c["name"] in target_cookies or c["name"].startswith("RBX"):
+                cookies_map[c["name"]] = c["value"]
 
-        with open(args.out, "w", encoding="utf-8") as f:
-            json.dump(primed, f)
+        # If PerimeterX cookies are missing, print warning
+        if "_px3" not in cookies_map:
+            print("[WARNING] PerimeterX cookie _px3 was not generated. Proxy might be blocked or JS failed.")
 
-        print(f"[+] Captured {len(primed)} cookies: {', '.join(sorted(primed.keys()))}")
-        print(f"[+] Written to {args.out}")
+        # Ensure output directory exists
+        out_dir = os.path.dirname(args.output)
+        if out_dir and not os.path.exists(out_dir):
+            os.makedirs(out_dir)
 
-        context.close()
-        browser.close()
+        # Write to JSON
+        with open(args.output, "w") as f:
+            json.dump(cookies_map, f, indent=2)
+        print(f"[PRIMER] Saved primed cookies to {args.output}")
 
+        await browser.close()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -62,10 +62,13 @@ type ArkoseResponse struct {
 
 // ChallengeMetadataRaw represents the raw decoded JSON from Rblx-Challenge-Metadata,
 // supporting both the old format (dataExchangeBlob/unifiedCaptchaId) and
-// the new format (challengeId/sharedParameters). requestPath/requestMethod identify
-// the original request the challenge is gating, and must be echoed back in the
-// ChallengeMetadata sent to /challenge/v1/continue or Roblox rejects it with a
-// generic "an internal error occurred" 403.
+// the new format (challengeId/sharedParameters).
+//
+// requestPath/requestMethod are parsed here for informational purposes only.
+// A real successful browser capture (Captcha.NetZ.Vn/.playwright-mcp/req353_body.txt,
+// 200 OK) confirms the final "captcha"-type ChallengeMetadata sent to
+// /challenge/v1/continue must NOT include requestPath/requestMethod — including them
+// causes Roblox to reject the request with a generic "an internal error occurred" 403.
 type ChallengeMetadataRaw struct {
 	DataExchangeBlob string `json:"dataExchangeBlob"`
 	UnifiedCaptchaId string `json:"unifiedCaptchaId"`
@@ -106,16 +109,19 @@ type Config struct {
 }
 
 type CaptchaConfig struct {
-	Api_Key         string `yaml:"api_key"`
-	Provider        string `yaml:"provider"`
-	Http_Version    string `yaml:"http_version"`
-	Browser_Version string `yaml:"browser_version"`
-	Solve_POW       bool   `yaml:"solve_pow"`
+	Api_Key              string `yaml:"api_key"`
+	Provider             string `yaml:"provider"`
+	Http_Version         string `yaml:"http_version"`
+	Browser_Version      string `yaml:"browser_version"`
+	Solve_POW            bool   `yaml:"solve_pow"`
+	Recognition_Provider string `yaml:"recognition_provider"`
+	Recognition_API_Key  string `yaml:"recognition_api_key"`
 }
 
 type RegisterConfig struct {
-	Threads        int `yaml:"threads"`
-	Limit_Accounts int `yaml:"limit_accounts"`
+	Threads        int  `yaml:"threads"`
+	Limit_Accounts int  `yaml:"limit_accounts"`
+	Debug          bool `yaml:"debug"`
 }
 
 func (c *Config) Validate() error {

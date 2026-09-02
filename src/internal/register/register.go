@@ -7,6 +7,9 @@ import (
 	"RobloxRegister/src/internal/helpers/utils"
 
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	crand "crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -15,11 +18,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Noooste/azuretls-client"
@@ -28,16 +29,17 @@ import (
 )
 
 type Container struct {
-	HttpClient  *azuretls.Session
-	Proxy       string
-	Cookies     [][]string
-	CapConfig   class.CaptchaConfig
-	User        string
-	Password    string
-	Birthday    string
-	Gender      int
-	XCsrfToken  string
-	TraceID     string
+	HttpClient *azuretls.Session
+	Proxy      string
+	Cookies    [][]string
+	CapConfig  class.CaptchaConfig
+	User       string
+	Password   string
+	Birthday   string
+	Gender     int
+	XCsrfToken string
+	TraceID    string
+	HBAKey     *ecdsa.PrivateKey
 }
 
 // Traceparent builds a fresh W3C traceparent header value for a single
@@ -56,29 +58,54 @@ var (
 
 const (
 	maxRetries = 3
-	// The fingerprint pool files were captured from Chrome/148 browsers —
-	// their BDA telemetry (canvas hash, WebGL renderer, audio fingerprint,
-	// user_agent_data_brands) all claim Chrome/148. The HTTP User-Agent and
-	// sec-ch-ua sent by the generator MUST match the BDA version; any
-	// mismatch is a deterministic bot signal that bumps Arkose wave count.
-	// The azuretls TLS ClientHello is Chrome-133-shaped but Arkose's risk
-	// engine does not cross-check JA3 vs application-layer UA directly.
-	userAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
-	sec_ch_ua       = `"Not/A)Brand";v="8", "Chromium";v="148", "Google Chrome";v="148"`
-	accept_language = "en-US,en;q=0.9;q=0.9"
+	// azuretls.Chrome (see SetHttpSession) negotiates its ClientHello via
+	// GetLastChromeVersion() in github.com/Noooste/azuretls-client@v1.13.2.
+	// That function's shape (post-quantum X25519MLKEM768 key share + ECH
+	// GREASE) matches recent Chrome regardless of the "133" in its own
+	// stale doc comment -- the JA3/JA4 shape has not changed since, so it
+	// does not itself pin us to any one Chrome major version.
+	//
+	// What DOES need to match is the captcha solver's own output: the
+	// solver's static fingerprint pool (Captcha.NetZ.Vn/fingerprint/*) is
+	// Chrome148/149/146 UA samples, and the solver's own TLS layer rewrites
+	// whatever it picks down to Chrome/146 before it ever talks to Arkose
+	// (see solver_run.log: "session UA rewritten by TLS profile resolution:
+	// ...Chrome/148... -> ...Chrome/146..."). So every BDA/captcha token
+	// this solver returns is Chrome146-flavored. Roblox/Arkose cross-check
+	// that token identity against this session's own UA/sec-ch-ua headers;
+	// a mismatch is a deterministic bot signal. So this fallback UA (used
+	// whenever the solver doesn't report its own -- see token.UserAgent
+	// below) MUST claim Chrome 146 to match what the solver actually
+	// produces, NOT some arbitrary earlier version.
+	userAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+	sec_ch_ua       = `"Not A(Brand";v="99", "Chromium";v="146", "Google Chrome";v="146"`
+	accept_language = "en-US,en;q=0.9"
 )
 
 func isTLSConsistentUA(ua string) bool {
-	return strings.Contains(ua, "Chrome/148") || strings.Contains(ua, "Chrome/133")
+	return strings.Contains(ua, "Chrome/145.") || strings.Contains(ua, "Chrome/146.") || strings.Contains(ua, "Chrome/148.")
 }
 
+// EnsureStickyProxy pins a DataImpulse proxy to one exit IP for the lifetime
+// of a registration attempt, using DataImpulse's documented sticky-session
+// syntax (";sessid.<token>" appended to the username). Without this, the
+// gateway rotates the exit IP per connection, so the solver's Arkose calls
+// and this process's own Roblox /continue call can land on different IPs —
+// which Roblox/Arkose treat as "Challenge failed to authorize request".
+// See docs.dataimpulse.com/proxies/parameters/session-id.
+var nettifySessionRegex = regexp.MustCompile(`-session-[a-zA-Z0-9]+`)
+
 func EnsureStickyProxy(proxyStr string) string {
-	if strings.Contains(proxyStr, "dataimpulse.com") && !strings.Contains(proxyStr, "_session-") {
+	if strings.Contains(proxyStr, "nettify.xyz") {
+		randSess := fmt.Sprintf("-session-%06x", rand.Uint32()&0xffffff)
+		return nettifySessionRegex.ReplaceAllString(proxyStr, randSess)
+	}
+	if strings.Contains(proxyStr, "dataimpulse.com") && !strings.Contains(proxyStr, ";sessid.") {
 		sessionID := fmt.Sprintf("%08x", rand.Uint32())
 		if u, err := url.Parse(proxyStr); err == nil && u.User != nil {
 			user := u.User.Username()
 			pass, hasPass := u.User.Password()
-			newUser := user + "_session-" + sessionID
+			newUser := user + ";sessid." + sessionID
 			if hasPass {
 				u.User = url.UserPassword(newUser, pass)
 			} else {
@@ -94,30 +121,30 @@ func RegistrationProcess(CaptchaConfig class.CaptchaConfig, worker_id int, proxy
 	proxyStr = EnsureStickyProxy(proxyStr)
 
 	RegistrationContainer := &Container{
-		Proxy:       proxyStr,
-		TraceID:     utils.NewTraceID(),
-		HttpClient:  azuretls.NewSession(),
-		CapConfig:   CaptchaConfig,
-		User:        roblox_profile.GetUsername(),
-		Password:    roblox_profile.GetPassword(),
-		Birthday:    roblox_profile.GetBirthDay(),
-		Gender:      roblox_profile.GetGender(),
+		Proxy:      proxyStr,
+		TraceID:    utils.NewTraceID(),
+		HttpClient: azuretls.NewSession(),
+		CapConfig:  CaptchaConfig,
+		User:       roblox_profile.GetUsername(),
+		Password:   roblox_profile.GetPassword(),
+		Birthday:   roblox_profile.GetBirthDay(),
+		Gender:     roblox_profile.GetGender(),
 	}
 
 	utils.Output("INFO", fmt.Sprintf("Start generate - %s", RegistrationContainer.User))
 
 	if err := RegistrationContainer.SetHttpSession(); err != nil {
-		utils.Output("FAILED", fmt.Sprintf("%s - SetHttpSession failed: %v - proxy=%s", RegistrationContainer.User, err, proxyStr))
+		utils.Output("FAILED", fmt.Sprintf("%s - SetHttpSession failed: %v", RegistrationContainer.User, err))
 		return false
 	}
 
 	if err := RegistrationContainer.BeforeSignUp(); err != nil {
-		utils.Output("FAILED", fmt.Sprintf("%s - %s - proxy=%s", RegistrationContainer.User, err, proxyStr))
+		utils.Output("FAILED", fmt.Sprintf("%s - %s", RegistrationContainer.User, err))
 		return false
 	}
 
 	if err := RegistrationContainer.SignUp(); err != nil {
-		utils.Output("FAILED", fmt.Sprintf("%s - %s - proxy=%s", RegistrationContainer.User, err, proxyStr))
+		utils.Output("FAILED", fmt.Sprintf("%s - %s", RegistrationContainer.User, err))
 		return false
 	}
 
@@ -128,10 +155,6 @@ func RegistrationProcess(CaptchaConfig class.CaptchaConfig, worker_id int, proxy
 func (g *Container) SetHttpSession() error {
 
 	g.HttpClient.Browser = azuretls.Chrome
-
-	if err := g.HttpClient.ApplyHTTP2("1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p"); err != nil {
-		return fmt.Errorf("failed set HTTP2")
-	}
 
 	if g.Proxy != "" {
 		if err := g.HttpClient.SetProxy(g.Proxy); err != nil {
@@ -173,62 +196,11 @@ func (g *Container) DoRequest(method, url string, body []byte) (*azuretls.Respon
 
 		resp, err = g.HttpClient.Do(req)
 		if err == nil {
-			if csrf := string(resp.Header.Get("X-Csrf-Token")); csrf != "" {
-				g.XCsrfToken = csrf
-			}
-			g.updateCookiesFromResponse(resp)
 			return resp, nil
 		}
 	}
 
 	return nil, fmt.Errorf("failed send request: %s", err)
-}
-
-func (g *Container) updateCookiesFromResponse(resp *azuretls.Response) {
-	if resp == nil || resp.Header == nil {
-		return
-	}
-	setCookies := resp.Header.Values("Set-Cookie")
-	if len(setCookies) == 0 {
-		if sc := resp.Header.Get("Set-Cookie"); sc != "" {
-			setCookies = []string{sc}
-		}
-	}
-	if len(setCookies) == 0 {
-		return
-	}
-
-	existingCookies := make(map[string]string)
-	for _, pair := range g.Cookies {
-		if len(pair) >= 2 && pair[0] == "cookie" {
-			for _, part := range strings.Split(pair[1], "; ") {
-				kv := strings.SplitN(part, "=", 2)
-				if len(kv) == 2 {
-					existingCookies[strings.TrimSpace(kv[0])] = kv[1]
-				}
-			}
-		}
-	}
-
-	for _, sc := range setCookies {
-		parts := strings.SplitN(sc, ";", 2)
-		if len(parts) > 0 {
-			kv := strings.SplitN(parts[0], "=", 2)
-			if len(kv) == 2 {
-				name := strings.TrimSpace(kv[0])
-				val := strings.TrimSpace(kv[1])
-				if name != "" && val != "" {
-					existingCookies[name] = val
-				}
-			}
-		}
-	}
-
-	var cookieParts []string
-	for k, v := range existingCookies {
-		cookieParts = append(cookieParts, k+"="+v)
-	}
-	g.Cookies = [][]string{{"cookie", strings.Join(cookieParts, "; ")}}
 }
 
 // loadPrimedCookies is a validation-test-only hook: if PRIMED_COOKIES_FILE
@@ -238,58 +210,7 @@ func (g *Container) updateCookiesFromResponse(resp *azuretls.Response) {
 // cookie names. This exists purely to test whether a real-browser-obtained
 // PerimeterX/Arkose cookie changes registration outcome vs. azuretls's own
 // TLS-fingerprint-only warm-up -- production runs never set this env var, so
-var harvesterOnce sync.Once
-
-func ensureHarvesterServiceRunning() {
-	harvesterOnce.Do(func() {
-		client := &http.Client{Timeout: 1 * time.Second}
-		_, err := client.Get("http://127.0.0.1:5000/health")
-		if err != nil {
-			utils.Output("INFO", "PX Harvester service not detected, auto-launching px_harvester_service.py in background...")
-			cmd := exec.Command("python", "px_harvester_service.py")
-			if err := cmd.Start(); err != nil {
-				utils.Output("WARNING", fmt.Sprintf("Failed to auto-start px_harvester_service.py: %s", err))
-			} else {
-				time.Sleep(3 * time.Second)
-			}
-		}
-	})
-}
-
-func fetchPXCookiesFromHarvester(proxyStr string) map[string]string {
-	ensureHarvesterServiceRunning()
-	harvesterURL := os.Getenv("PX_HARVESTER_URL")
-	if harvesterURL == "" {
-		harvesterURL = "http://127.0.0.1:5000/get_px_cookies"
-	}
-	payload, _ := json.Marshal(map[string]string{"proxy": proxyStr})
-	client := &http.Client{Timeout: 25 * time.Second}
-
-	for attempt := 1; attempt <= 3; attempt++ {
-		req, err := http.NewRequest("POST", harvesterURL, bytes.NewBuffer(payload))
-		if err != nil {
-			return nil
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
-		if err == nil && resp.StatusCode == 200 {
-			var res struct {
-				Status  string            `json:"status"`
-				Cookies map[string]string `json:"cookies"`
-			}
-			if err := json.NewDecoder(resp.Body).Decode(&res); err == nil && len(res.Cookies) > 0 {
-				if _, hasPx3 := res.Cookies["_px3"]; hasPx3 {
-					resp.Body.Close()
-					return res.Cookies
-				}
-			}
-			resp.Body.Close()
-		}
-		time.Sleep(2 * time.Second)
-	}
-	return nil
-}
-
+// this is a no-op by default.
 func loadPrimedCookies() map[string]string {
 	path := os.Getenv("PRIMED_COOKIES_FILE")
 	if path == "" {
@@ -351,6 +272,20 @@ func (g *Container) mergeCookies(headers fhttp.Header) {
 	}
 }
 
+func (g *Container) updateSingleCookie(key, value string) {
+	updated := false
+	for i, kv := range g.Cookies {
+		if len(kv) == 2 && strings.HasPrefix(kv[1], key+"=") {
+			g.Cookies[i] = []string{"cookie", key + "=" + value}
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		g.Cookies = append(g.Cookies, []string{"cookie", key + "=" + value})
+	}
+}
+
 func (g *Container) BeforeSignUp() error {
 
 	g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
@@ -369,7 +304,20 @@ func (g *Container) BeforeSignUp() error {
 		{"priority", "u=0, i"},
 	}
 
+	if primed := loadPrimedCookies(); primed != nil {
+		parts := make([]string, 0, len(primed))
+		for k, v := range primed {
+			parts = append(parts, k+"="+v)
+		}
+		if len(parts) > 0 {
+			g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"cookie", strings.Join(parts, "; ")})
+		}
+	}
+
 	response, err := g.DoRequest("GET", "https://www.roblox.com/", nil)
+	if err == nil {
+		utils.Output("DEBUG", fmt.Sprintf("GET / status=%d len=%d body_snippet=%s", response.StatusCode, len(response.Body), string(response.Body)[:min(200, len(response.Body))]))
+	}
 
 	if err != nil {
 		return fmt.Errorf("getPage error: %s", err)
@@ -385,12 +333,7 @@ func (g *Container) BeforeSignUp() error {
 
 	cookies := parseCookies(response.Header)
 
-	if pxCookies := fetchPXCookiesFromHarvester(g.Proxy); len(pxCookies) > 0 {
-		for k, v := range pxCookies {
-			cookies[k] = v
-		}
-		utils.Output("INFO", fmt.Sprintf("%s - harvested %d PX cookie(s)", g.User, len(pxCookies)))
-	} else if primed := loadPrimedCookies(); primed != nil {
+	if primed := loadPrimedCookies(); primed != nil {
 		for k, v := range primed {
 			cookies[k] = v
 		}
@@ -402,44 +345,28 @@ func (g *Container) BeforeSignUp() error {
 		cookies["RBXPaymentsFlowContext"] = fmt.Sprintf("%s,", uuid.New())
 		cookies["RBXcb"] = "RBXViralAcquisition%3Dfalse%26RBXSource%3Dfalse%26GoogleAnalytics%3Dfalse"
 
-		// Explicitly include PX cookies if harvested
-		pxKeys := []string{"_px3", "pxcts", "_pxvid", "_pxhd", "_px2"}
-		allCookieKeys := append(order_cookies, pxKeys...)
-
-		for _, key := range allCookieKeys {
+		for _, key := range order_cookies {
 			if value, ok := cookies[key]; ok {
-				// avoid duplicate keys if already added
-				exists := false
-				for _, existing := range g.Cookies {
-					if len(existing) == 2 && strings.HasPrefix(existing[1], key+"=") {
-						exists = true
-						break
-					}
-				}
-				if !exists {
-					g.Cookies = append(g.Cookies, []string{"cookie", key + "=" + value})
-				}
+				g.Cookies = append(g.Cookies, []string{"cookie", key + "=" + value})
 			}
 		}
 
+		g.fetchCaptchaMetadata()
 	} else {
 		return fmt.Errorf("cookies empty")
 	}
 
-	body := &class.UserValidate{
+	body := &class.UserValidator{
 		Username: g.User,
-		Context:  "Signup",
 		Birthday: g.Birthday,
 	}
 
 	data, err := json.Marshal(body)
-
 	if err != nil {
 		return fmt.Errorf("failed json")
 	}
 
 	g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
-		{"content-length", strconv.Itoa(len(data))},
 		{"sec-ch-ua-platform", `"Windows"`},
 		{"x-csrf-token", g.XCsrfToken},
 		{"sec-ch-ua", sec_ch_ua},
@@ -458,90 +385,49 @@ func (g *Container) BeforeSignUp() error {
 		{"priority", "u=1, i"},
 	}
 
-	response, err = g.DoRequest("POST", "https://auth.roblox.com/v1/usernames/validate?urlLocale=en_us", data)
-
+	response, err = g.DoRequest("POST", "https://auth.roblox.com/v1/validators/username?urlLocale=en_us", data)
 	if err != nil {
-		return fmt.Errorf("userValidate request error")
+		return fmt.Errorf("userValidator request error")
 	}
 
 	if string(response.Body) == `{"code":0,"message":"Token Validation Failed"}` {
-
 		g.XCsrfToken = string(response.Header.Get("X-Csrf-Token"))
-
 		g.HttpClient.OrderedHeaders.Set("x-csrf-token", g.XCsrfToken)
-
-		response, err = g.DoRequest("POST", "https://auth.roblox.com/v1/usernames/validate?urlLocale=en_us", data)
-
-		if err != nil {
-			return fmt.Errorf("userValidate request error")
-		}
-
-	}
-
-	if string(response.Body) != `{"code":0,"message":"Username is valid"}` {
-
-		body := &class.UserValidator{
-			Username: g.User,
-			Birthday: g.Birthday,
-		}
-
-		data, err := json.Marshal(body)
-
-		if err != nil {
-			return fmt.Errorf("failed json")
-		}
-
-		g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
-			{"content-length", strconv.Itoa(len(data))},
-			{"sec-ch-ua-platform", `"Windows"`},
-			{"x-csrf-token", g.XCsrfToken},
-			{"sec-ch-ua", sec_ch_ua},
-			{"sec-ch-ua-mobile", "?0"},
-			{"traceparent", g.Traceparent()},
-			{"user-agent", userAgent},
-			{"accept", "application/json, text/plain, */*"},
-			{"content-type", "application/json;charset=UTF-8"},
-			{"origin", "https://www.roblox.com"},
-			{"sec-fetch-site", "same-site"},
-			{"sec-fetch-mode", "cors"},
-			{"sec-fetch-dest", "empty"},
-			{"referer", "https://www.roblox.com/"},
-			{"accept-encoding", "gzip, deflate, br, zstd"},
-			{"accept-language", accept_language},
-			{"priority", "u=1, i"},
-		}
-
-		body.Username = roblox_profile.GetUsername()
-
-		data, err = json.Marshal(body)
-
-		if err != nil {
-			return fmt.Errorf("failed json")
-		}
-
 		response, err = g.DoRequest("POST", "https://auth.roblox.com/v1/validators/username?urlLocale=en_us", data)
-
 		if err != nil {
 			return fmt.Errorf("userValidator request error")
 		}
-
-		var dataUsernameSuggestion class.UsernameResponse
-
-		err = json.Unmarshal(response.Body, &dataUsernameSuggestion)
-		if err != nil {
-			return fmt.Errorf("failed unmarshal")
-		}
-
-		if len(dataUsernameSuggestion.SuggestedUsernames) == 0 {
-			return fmt.Errorf("not found suggestion usernames")
-		}
-
-		g.User = dataUsernameSuggestion.SuggestedUsernames[0]
-
 	}
 
-	return nil
+	var dataUsernameSuggestion class.UsernameResponse
+	err = json.Unmarshal(response.Body, &dataUsernameSuggestion)
+	if err != nil {
+		return fmt.Errorf("failed unmarshal")
+	}
 
+	if len(dataUsernameSuggestion.SuggestedUsernames) > 0 {
+		g.User = dataUsernameSuggestion.SuggestedUsernames[0]
+		utils.Output("INFO", fmt.Sprintf("Used suggested username: %s", g.User))
+	} else if !dataUsernameSuggestion.DidGenerateNewUsername {
+		utils.Output("INFO", fmt.Sprintf("Generated username is valid: %s", g.User))
+	} else {
+		// Fallback: try generating a new username and request suggestions for it
+		body.Username = roblox_profile.GetUsername()
+		data, err = json.Marshal(body)
+		if err == nil {
+			response, err = g.DoRequest("POST", "https://auth.roblox.com/v1/validators/username?urlLocale=en_us", data)
+			if err == nil {
+				json.Unmarshal(response.Body, &dataUsernameSuggestion)
+				if len(dataUsernameSuggestion.SuggestedUsernames) > 0 {
+					g.User = dataUsernameSuggestion.SuggestedUsernames[0]
+					utils.Output("INFO", fmt.Sprintf("Used fallback suggested username: %s", g.User))
+				}
+			}
+		}
+	}
+	g.validatePassword()
+
+	return nil
 }
 
 // finalizeSignup extracts the freshly-issued .ROBLOSECURITY from a successful
@@ -575,12 +461,86 @@ func (g *Container) finalizeSignup(response *azuretls.Response, effectiveUA stri
 
 	utils.SaveAccount(g.User, g.Password, cookieValue)
 
-	utils.Output("SUCCESS", fmt.Sprintf("Successfully created - %s - proxy=%s", g.User, g.Proxy))
+	utils.Output("SUCCESS", fmt.Sprintf("Successfully created - %s", g.User))
 
 	return nil
 }
 
+func (g *Container) fetchCaptchaMetadata() {
+	g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
+		{"sec-ch-ua-platform", "\"Windows\""},
+		{"sec-ch-ua", sec_ch_ua},
+		{"sec-ch-ua-mobile", "?0"},
+		{"traceparent", g.Traceparent()},
+		{"user-agent", userAgent},
+		{"accept", "application/json, text/plain, */*"},
+		{"origin", "https://www.roblox.com"},
+		{"sec-fetch-site", "same-site"},
+		{"sec-fetch-mode", "cors"},
+		{"sec-fetch-dest", "empty"},
+		{"referer", "https://www.roblox.com/"},
+		{"accept-encoding", "gzip, deflate, br, zstd"},
+		{"accept-language", accept_language},
+	}
+	if cStr := g.CookieHeader(); cStr != "" {
+		g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"cookie", cStr})
+	}
+	g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"priority", "u=1, i"})
+
+	resp, err := g.DoRequest("GET", "https://apis.rbxcdn.com/captcha/v1/metadata", nil)
+	if err == nil {
+		g.mergeCookies(resp.Header)
+	}
+}
+
+func (g *Container) validatePassword() {
+	payload, err := json.Marshal(map[string]string{
+		"username": g.User,
+		"password": g.Password,
+	})
+	if err != nil {
+		return
+	}
+
+	g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
+		{"sec-ch-ua-platform", "\"Windows\""},
+		{"x-csrf-token", g.XCsrfToken},
+		{"sec-ch-ua", sec_ch_ua},
+		{"sec-ch-ua-mobile", "?0"},
+		{"traceparent", g.Traceparent()},
+		{"user-agent", userAgent},
+		{"accept", "application/json, text/plain, */*"},
+		{"content-type", "application/json;charset=UTF-8"},
+		{"origin", "https://www.roblox.com"},
+		{"sec-fetch-site", "same-site"},
+		{"sec-fetch-mode", "cors"},
+		{"sec-fetch-dest", "empty"},
+		{"referer", "https://www.roblox.com/"},
+		{"accept-encoding", "gzip, deflate, br, zstd"},
+		{"accept-language", accept_language},
+	}
+	if cStr := g.CookieHeader(); cStr != "" {
+		g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"cookie", cStr})
+	}
+	g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"priority", "u=1, i"})
+
+	resp, err := g.DoRequest("POST", "https://auth.roblox.com/v2/passwords/validate?urlLocale=en_us", payload)
+	if err == nil {
+		if newCsrf := resp.Header.Get("X-Csrf-Token"); newCsrf != "" {
+			g.XCsrfToken = newCsrf
+		}
+		g.mergeCookies(resp.Header)
+	}
+}
+
 func (g *Container) SignUp() error {
+	if g.HBAKey == nil {
+		privateKey, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
+		if err != nil {
+			return fmt.Errorf("failed Generate HBA Key: %s", err)
+		}
+		g.HBAKey = privateKey
+	}
 
 	var secureAuth *class.SecureAuth
 
@@ -627,7 +587,6 @@ func (g *Container) SignUp() error {
 	})
 
 	g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
-		{"content-length", strconv.Itoa(len(valPayload))},
 		{"sec-ch-ua-platform", "\"Windows\""},
 		{"x-csrf-token", g.XCsrfToken},
 		{"sec-ch-ua", sec_ch_ua},
@@ -653,12 +612,25 @@ func (g *Container) SignUp() error {
 		if newCsrf := valResp.Header.Get("X-Csrf-Token"); newCsrf != "" {
 			g.XCsrfToken = newCsrf
 			g.HttpClient.OrderedHeaders[1] = []string{"x-csrf-token", g.XCsrfToken}
-			_, _ = g.DoRequest("POST", "https://auth.roblox.com/v1/usernames/validate?urlLocale=en_us", valPayload)
+			valResp, valErr = g.DoRequest("POST", "https://auth.roblox.com/v1/usernames/validate?urlLocale=en_us", valPayload)
+		}
+	}
+	if valResp != nil && valResp.HttpResponse.StatusCode == 200 {
+		var valResult struct {
+			Code               int      `json:"code"`
+			Message            string   `json:"message"`
+			SuggestedUsernames []string `json:"suggestedUsernames"`
+		}
+		if err := json.Unmarshal(valResp.Body, &valResult); err == nil {
+			if valResult.Code != 0 && len(valResult.SuggestedUsernames) > 0 {
+				g.User = valResult.SuggestedUsernames[0]
+				utils.Output("INFO", fmt.Sprintf("Adopted suggested valid username: %s", g.User))
+			}
 		}
 	}
 	time.Sleep(1200 * time.Millisecond)
 
-	secureAuth, err = utils.GenerateSecureAuth(nonce)
+	secureAuth, err = utils.GenerateSecureAuth(g.HBAKey, nonce)
 
 	if err != nil {
 		return fmt.Errorf("failed GenerateSecureAuth")
@@ -700,7 +672,6 @@ func (g *Container) SignUp() error {
 	}
 
 	g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
-		{"content-length", strconv.Itoa(len(dataSignup))},
 		{"sec-ch-ua-platform", "\"Windows\""},
 		{"x-csrf-token", g.XCsrfToken},
 		{"sec-ch-ua", sec_ch_ua},
@@ -722,6 +693,10 @@ func (g *Container) SignUp() error {
 		g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"cookie", cStr})
 	}
 
+	if hToken, err := utils.GenerateBoundAuthToken(g.HBAKey, "POST", "https://auth.roblox.com/v2/signup?urlLocale=en_us", dataSignup); err == nil {
+		g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"x-bound-auth-token", hToken})
+	}
+
 	g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"priority", "u=1, i"})
 
 	response, err = g.DoRequest("POST", "https://auth.roblox.com/v2/signup?urlLocale=en_us", dataSignup)
@@ -731,6 +706,8 @@ func (g *Container) SignUp() error {
 	}
 
 	if string(response.Body) == `{"errors":[{"code":0,"message":"Challenge is required to authorize the request"}]}` {
+		g.fetchCaptchaMetadata()
+
 		if newCsrf := response.Header.Get("X-Csrf-Token"); newCsrf != "" {
 			g.XCsrfToken = newCsrf
 		}
@@ -760,16 +737,16 @@ func (g *Container) SignUp() error {
 			outerChallengeId = challengeIdHeader
 		}
 
-		// If Roblox returned captchav2, we MUST call /v2/captcha FIRST to get real redemption_token and the inner Arkose blob!
+		// If Roblox returned captchav2, we MUST call /v2/alt-captcha FIRST to get real redemption_token and the inner Arkose blob!
 		if strings.EqualFold(outerChallengeType, "captchav2") {
 			targetId := outerChallengeId
-			utils.Output("DEBUG", fmt.Sprintf("Step 1: Requesting redemption_token from /v2/captcha for %s...", targetId))
+			utils.Output("DEBUG", fmt.Sprintf("Step 1: Requesting redemption_token from /v2/alt-captcha for %s...", targetId))
 
 			v2CapBody, _ := json.Marshal(map[string]string{
 				"challenge_id": targetId,
 			})
 
-			// Pre-flight OPTIONS for /v2/captcha
+			// Pre-flight OPTIONS for /v2/alt-captcha
 			g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
 				{"accept", "*/*"},
 				{"access-control-request-headers", "content-type,traceparent,x-csrf-token"},
@@ -778,7 +755,75 @@ func (g *Container) SignUp() error {
 				{"sec-fetch-mode", "cors"},
 				{"user-agent", userAgent},
 			}
-			_, _ = g.DoRequest("OPTIONS", "https://apis.roblox.com/v2/captcha?urlLocale=en_us", nil)
+			_, _ = g.DoRequest("OPTIONS", "https://apis.roblox.com/v2/alt-captcha?urlLocale=en_us", nil)
+
+			g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
+				{"sec-ch-ua-platform", "\"Windows\""},
+				{"x-csrf-token", g.XCsrfToken},
+				{"sec-ch-ua", sec_ch_ua},
+				{"sec-ch-ua-mobile", "?0"},
+				{"traceparent", g.Traceparent()},
+				{"user-agent", userAgent},
+				{"accept", "application/json"},
+				{"content-type", "application/json;charset=UTF-8"},
+				{"origin", "https://www.roblox.com"},
+				{"sec-fetch-site", "same-site"},
+				{"sec-fetch-mode", "cors"},
+				{"sec-fetch-dest", "empty"},
+				{"referer", "https://www.roblox.com/"},
+				{"accept-encoding", "gzip, deflate, br, zstd"},
+				{"accept-language", accept_language},
+			}
+			if cStr := g.CookieHeader(); cStr != "" {
+				g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"cookie", cStr})
+			}
+
+			if hToken, err := utils.GenerateBoundAuthToken(g.HBAKey, "POST", "https://apis.roblox.com/v2/alt-captcha?urlLocale=en_us", v2CapBody); err == nil {
+				g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"x-bound-auth-token", hToken})
+			}
+
+			respRedeem, errRedeem := g.DoRequest("POST", "https://apis.roblox.com/v2/alt-captcha?urlLocale=en_us", v2CapBody)
+			if errRedeem == nil && respRedeem.HttpResponse.StatusCode == 403 {
+				if newCsrf := respRedeem.Header.Get("X-Csrf-Token"); newCsrf != "" {
+					g.XCsrfToken = newCsrf
+					g.HttpClient.OrderedHeaders.Set("x-csrf-token", g.XCsrfToken)
+					respRedeem, errRedeem = g.DoRequest("POST", "https://apis.roblox.com/v2/alt-captcha?urlLocale=en_us", v2CapBody)
+				}
+			}
+			if errRedeem != nil || respRedeem.HttpResponse.StatusCode != 200 {
+				return fmt.Errorf("failed get redemption_token from /v2/alt-captcha: status=%d body=%s", respRedeem.HttpResponse.StatusCode, string(respRedeem.Body))
+			}
+
+			var redeemRes struct {
+				RedemptionToken string `json:"redemption_token"`
+			}
+			if err := json.Unmarshal(respRedeem.Body, &redeemRes); err != nil || redeemRes.RedemptionToken == "" {
+				return fmt.Errorf("invalid redemption_token response: %s", string(respRedeem.Body))
+			}
+
+			utils.Output("DEBUG", fmt.Sprintf("Got real redemption_token: %s", redeemRes.RedemptionToken[:15]))
+
+			// Step 2: Continue captchav2 with real redemptionToken
+			captchav2MetaBytes, _ := json.Marshal(map[string]string{
+				"redemptionToken": redeemRes.RedemptionToken,
+			})
+			captchav2Meta := string(captchav2MetaBytes)
+			captchav2Body, _ := json.Marshal(map[string]string{
+				"challengeId":       targetId,
+				"challengeType":     "captchav2",
+				"challengeMetadata": captchav2Meta,
+			})
+
+			// Pre-flight OPTIONS for /challenge/v1/continue
+			g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
+				{"accept", "*/*"},
+				{"access-control-request-headers", "content-type,traceparent,x-csrf-token"},
+				{"access-control-request-method", "POST"},
+				{"origin", "https://www.roblox.com"},
+				{"sec-fetch-mode", "cors"},
+				{"user-agent", userAgent},
+			}
+			_, _ = g.DoRequest("OPTIONS", "https://apis.roblox.com/challenge/v1/continue?urlLocale=en_us", nil)
 
 			g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
 				{"sec-ch-ua-platform", "\"Windows\""},
@@ -797,31 +842,16 @@ func (g *Container) SignUp() error {
 				{"accept-encoding", "gzip, deflate, br, zstd"},
 				{"accept-language", accept_language},
 			}
+
 			if cStr := g.CookieHeader(); cStr != "" {
 				g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"cookie", cStr})
 			}
 
-			respRedeem, errRedeem := g.DoRequest("POST", "https://apis.roblox.com/v2/captcha?urlLocale=en_us", v2CapBody)
-			if errRedeem != nil || respRedeem.HttpResponse.StatusCode != 200 {
-				return fmt.Errorf("failed get redemption_token from /v2/captcha: status=%d", respRedeem.HttpResponse.StatusCode)
+			if hToken, err := utils.GenerateBoundAuthToken(g.HBAKey, "POST", "https://apis.roblox.com/challenge/v1/continue?urlLocale=en_us", captchav2Body); err == nil {
+				g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"x-bound-auth-token", hToken})
 			}
 
-			var redeemRes struct {
-				RedemptionToken string `json:"redemption_token"`
-			}
-			if err := json.Unmarshal(respRedeem.Body, &redeemRes); err != nil || redeemRes.RedemptionToken == "" {
-				return fmt.Errorf("invalid redemption_token response: %s", string(respRedeem.Body))
-			}
-
-			utils.Output("DEBUG", fmt.Sprintf("Got real redemption_token: %s", redeemRes.RedemptionToken[:15]))
-
-			// Step 2: Continue captchav2 with real redemptionToken
-			captchav2Meta := fmt.Sprintf(`{"redemptionToken":"%s"}`, redeemRes.RedemptionToken)
-			captchav2Body, _ := json.Marshal(map[string]string{
-				"challengeId":       targetId,
-				"challengeType":     "captchav2",
-				"challengeMetadata": captchav2Meta,
-			})
+			g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"priority", "u=1, i"})
 
 			respV2, errV2 := g.DoRequest("POST", "https://apis.roblox.com/challenge/v1/continue?urlLocale=en_us", captchav2Body)
 			if errV2 != nil || respV2.HttpResponse.StatusCode != 200 {
@@ -839,6 +869,7 @@ func (g *Container) SignUp() error {
 					UnifiedCaptchaId string `json:"unifiedCaptchaId"`
 				}
 				if err := json.Unmarshal([]byte(v2ContinueRes.ChallengeMetadata), &innerMeta); err == nil {
+					utils.Output("DEBUG", "RAW INNER META: "+v2ContinueRes.ChallengeMetadata)
 					if innerMeta.DataExchangeBlob != "" {
 						ArkoseBlob = innerMeta.DataExchangeBlob
 					}
@@ -857,10 +888,34 @@ func (g *Container) SignUp() error {
 			}
 		}
 
-		token, err := funcaptcha.GetToken(g.CapConfig.Provider, g.CapConfig.Api_Key, g.CapConfig.Http_Version, g.CapConfig.Browser_Version, ArkoseBlob, g.Proxy, g.CookieHeader(), g.CapConfig.Solve_POW)
+		if os.Getenv("NEGT_HARVEST_BDA") == "1" {
+			harvestUA := os.Getenv("NEGT_HARVEST_UA")
+			if harvestUA == "" {
+				harvestUA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+			}
+			payload, _ := json.Marshal(map[string]string{"blob": ArkoseBlob, "proxy": g.Proxy, "user_agent": harvestUA})
+			req, _ := http.NewRequest("POST", "http://127.0.0.1:8766/prime", bytes.NewBuffer(payload))
+			req.Header.Set("Content-Type", "application/json")
+			client := &http.Client{Timeout: 30 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Errorf("harvest: HBA service error: %w", err)
+			}
+			defer resp.Body.Close()
+			utils.Output("INFO", fmt.Sprintf("%s - harvest: blob captured & sent to HBA dump service", g.User))
+			return fmt.Errorf("harvest-mode: aborting before real signup (blob captured)")
+		}
+
+		token, err := funcaptcha.GetToken(g.CapConfig.Provider, g.CapConfig.Api_Key, g.CapConfig.Http_Version, g.CapConfig.Browser_Version, ArkoseBlob, g.Proxy, g.CookieHeader(), g.CapConfig.Solve_POW, g.CapConfig.Recognition_Provider, g.CapConfig.Recognition_API_Key)
 
 		if err != nil {
 			return err
+		}
+
+		if token.Cookies != nil {
+			for k, v := range token.Cookies {
+				g.updateSingleCookie(k, v)
+			}
 		}
 
 		captchaToken := token.Token
@@ -876,6 +931,9 @@ func (g *Container) SignUp() error {
 
 		if token.UserAgent != "" && isTLSConsistentUA(token.UserAgent) {
 			effectiveUA = token.UserAgent
+			if strings.Contains(effectiveUA, "Chrome/148.") && token.SecChUa == "" {
+				effectiveSecChUa = `"Not/A)Brand";v="99", "Chromium";v="148", "Google Chrome";v="148"`
+			}
 		}
 		if token.SecChUa != "" {
 			effectiveSecChUa = token.SecChUa
@@ -913,15 +971,25 @@ func (g *Container) SignUp() error {
 		g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
 			{"sec-ch-ua-platform", "\"Windows\""},
 			{"x-csrf-token", g.XCsrfToken},
-			{"referer", "https://www.roblox.com/"},
-			{"accept-language", accept_language},
 			{"sec-ch-ua", effectiveSecChUa},
 			{"sec-ch-ua-mobile", "?0"},
 			{"traceparent", g.Traceparent()},
 			{"user-agent", effectiveUA},
 			{"accept", "application/json, text/plain, */*"},
 			{"content-type", "application/json;charset=UTF-8"},
+			{"origin", "https://www.roblox.com"},
+			{"sec-fetch-site", "same-site"},
+			{"sec-fetch-mode", "cors"},
+			{"sec-fetch-dest", "empty"},
+			{"referer", "https://www.roblox.com/"},
+			{"accept-encoding", "gzip, deflate, br, zstd"},
+			{"accept-language", accept_language},
 		}
+
+		if cStr := g.CookieHeader(); cStr != "" {
+			g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"cookie", cStr})
+		}
+		g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"priority", "u=1, i"})
 
 		utils.Output("DEBUG", fmt.Sprintf("continue request body: %s", string(body)))
 
@@ -962,8 +1030,6 @@ func (g *Container) SignUp() error {
 		g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
 			{"sec-ch-ua-platform", "\"Windows\""},
 			{"x-csrf-token", g.XCsrfToken},
-			{"referer", "https://www.roblox.com/"},
-			{"accept-language", accept_language},
 			{"sec-ch-ua", effectiveSecChUa},
 			{"sec-ch-ua-mobile", "?0"},
 			{"traceparent", g.Traceparent()},
@@ -974,19 +1040,32 @@ func (g *Container) SignUp() error {
 			{"sec-fetch-site", "same-site"},
 			{"sec-fetch-mode", "cors"},
 			{"sec-fetch-dest", "empty"},
+			{"referer", "https://www.roblox.com/"},
+			{"accept-encoding", "gzip, deflate, br, zstd"},
+			{"accept-language", accept_language},
 		}
 		if cStr := g.CookieHeader(); cStr != "" {
 			g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"cookie", cStr})
 		}
 
-		response, err = g.DoRequest("POST", "https://apis.roblox.com/challenge/v1/continue?urlLocale=en_us", body)
-		if err == nil {
-			g.updateCookiesFromResponse(response)
+		if hToken, err := utils.GenerateBoundAuthToken(g.HBAKey, "POST", "https://apis.roblox.com/challenge/v1/continue?urlLocale=en_us", body); err == nil {
+			g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"x-bound-auth-token", hToken})
 		}
+
+		g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"priority", "u=1, i"})
+
+		response, err = g.DoRequest("POST", "https://apis.roblox.com/challenge/v1/continue?urlLocale=en_us", body)
 		if err != nil {
 			return fmt.Errorf("captchaContinue error")
 		}
 		utils.Output("DEBUG", fmt.Sprintf("/continue response status: %d, body: %s", response.HttpResponse.StatusCode, string(response.Body)))
+
+		if response.HttpResponse.StatusCode != 200 {
+			utils.Output("DEBUG", fmt.Sprintf(
+				"captcha continue rejected (non-fatal, falling through to header-retry): status=%d body=%s",
+				response.HttpResponse.StatusCode, string(response.Body)))
+			// không return — rơi tiếp xuống retry-loop dưới đây
+		}
 
 		for attempt := 1; attempt <= maxRetries; attempt++ {
 			g.HttpClient.OrderedHeaders = azuretls.OrderedHeaders{
@@ -995,13 +1074,13 @@ func (g *Container) SignUp() error {
 				{"x-csrf-token", g.XCsrfToken},
 				{"sec-ch-ua", effectiveSecChUa},
 				{"rblx-challenge-id", UnifiedCaptchaId},
-				{"rblx-challenge-type", outerChallengeType},
+				{"rblx-challenge-type", "captcha"},
 				{"sec-ch-ua-mobile", "?0"},
 				{"traceparent", g.Traceparent()},
 				{"user-agent", effectiveUA},
 				{"accept", "application/json, text/plain, */*"},
 				{"content-type", "application/json;charset=UTF-8"},
-				{"x-retry-attempt", "1"},
+				{"x-retry-attempt", strconv.Itoa(attempt)},
 				{"origin", "https://www.roblox.com"},
 				{"sec-fetch-site", "same-site"},
 				{"sec-fetch-mode", "cors"},
@@ -1013,6 +1092,10 @@ func (g *Container) SignUp() error {
 
 			if cStr := g.CookieHeader(); cStr != "" {
 				g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"cookie", cStr})
+			}
+
+			if hToken, err := utils.GenerateBoundAuthToken(g.HBAKey, "POST", "https://auth.roblox.com/v2/signup?urlLocale=en_us", dataSignup); err == nil {
+				g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"x-bound-auth-token", hToken})
 			}
 
 			g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"priority", "u=1, i"})

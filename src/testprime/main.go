@@ -41,9 +41,14 @@ func main() {
 		panic(err)
 	}
 
-	proxyStr, err := readProxyLine(*proxyIndex)
-	if err != nil {
-		panic(err)
+	var proxyStr string
+	if *proxyIndex >= 0 {
+		proxyStr, err = readProxyLine(*proxyIndex)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		fmt.Println("[*] Running in DIRECT mode (no proxy)")
 	}
 
 	if *primedFile != "" {

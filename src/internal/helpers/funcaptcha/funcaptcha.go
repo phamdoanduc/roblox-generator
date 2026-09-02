@@ -1,6 +1,7 @@
 package funcaptcha
 
 import (
+	"RobloxRegister/src/internal/helpers/utils"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -29,13 +30,36 @@ var serverURL = func() string {
 	return "http://127.0.0.1:2323"
 }()
 
+// The self-hosted hachi-captcha solver (Python FastAPI server, see
+// Hiu Share/hachi-captcha-master-changed). Override with HACHI_SOLVER_URL if
+// it runs on a different host/port.
+var hachiServerURL = func() string {
+	if v := strings.TrimSpace(os.Getenv("HACHI_SOLVER_URL")); v != "" {
+		return strings.TrimRight(v, "/")
+	}
+	return "http://127.0.0.1:8080"
+}()
+
+// hachi's /solve blocks server-side until the challenge is solved (up to its
+// own DIRECT_SOLVE_WAIT_SECONDS=200s), so give the HTTP client enough room.
+var hachiClient = &http.Client{
+	Timeout: 220 * time.Second,
+	Transport: &http.Transport{
+		Proxy:             nil,
+		DisableKeepAlives: true,
+	},
+}
+
 const (
 	robloxRegisterPublicKey = "A2A14B1D-1AF3-C791-9BBC-EE33CC7A0A6F"
-	robloxSite               = "https://www.roblox.com"
-	robloxAPIURL             = "https://arkoselabs.roblox.com"
+	robloxSite              = "https://www.roblox.com"
+	robloxAPIURL            = "https://arkoselabs.roblox.com"
 )
 
 func debugLog(format string, args ...interface{}) {
+	if !utils.IsDebugEnabled {
+		return
+	}
 	fmt.Fprintf(os.Stderr, "[SOLVE] "+format+"\n", args...)
 }
 
@@ -78,6 +102,7 @@ type TokenResult struct {
 	Token     string
 	UserAgent string
 	SecChUa   string
+	Cookies   map[string]string
 }
 
 // GetToken solves the Roblox FunCaptcha and returns an Arkose token.
@@ -85,34 +110,48 @@ type TokenResult struct {
 // third-party service, one HTTP client away); anything else (including "")
 // uses this project's own solver at serverURL. Switching backends is a
 // config change (settings_captcha.provider), not a code change.
-func GetToken(provider, api_key, http_version, browser_version, blob, proxy, cookies string, solvePOW bool) (*TokenResult, error) {
-	if strings.EqualFold(strings.TrimSpace(provider), "cds") {
+func GetToken(provider, api_key, http_version, browser_version, blob, proxy, cookies string, solvePOW bool, recognitionProvider, recognitionAPIKey string) (*TokenResult, error) {
+	switch {
+	case strings.EqualFold(strings.TrimSpace(provider), "cds"):
 		return getTokenCDS(api_key, http_version, browser_version, blob, proxy, cookies, solvePOW)
+	case strings.EqualFold(strings.TrimSpace(provider), "hachi"):
+		return getTokenHachi(api_key, blob, proxy, cookies, solvePOW)
+	case strings.EqualFold(strings.TrimSpace(provider), "hba"):
+		return getTokenHBA(blob, proxy)
 	}
-	return getTokenNetz(api_key, http_version, browser_version, blob, proxy, cookies, solvePOW)
+	return getTokenNetz(api_key, http_version, browser_version, blob, proxy, cookies, solvePOW, recognitionProvider, recognitionAPIKey)
 }
 
-func getTokenNetz(api_key, http_version, browser_version, blob, proxy, cookies string, solvePOW bool) (*TokenResult, error) {
+func getTokenNetz(api_key, http_version, browser_version, blob, proxy, cookies string, solvePOW bool, recognitionProvider, recognitionAPIKey string) (*TokenResult, error) {
 	body := map[string]interface{}{
 		"challengeInfo": map[string]interface{}{
-			"publicKey": robloxRegisterPublicKey,
-			"site":      robloxSite,
-			"surl":      robloxAPIURL,
-			"capiMode":  "inline",
+			"publicKey":  robloxRegisterPublicKey,
+			"site":       robloxSite,
+			"surl":       robloxAPIURL,
+			"capiMode":   "inline",
 			"styleTheme": "default",
 			"extraData": map[string]interface{}{
 				"blob": blob,
 			},
-			"ancestorOrigins": []string{robloxSite, robloxSite},
-			"treeIndex":       []int{0, 0},
-			"treeStructure":   "[[[]]]",
-			"locationHref":    robloxSite + "/arkose/iframe",
+			"ancestorOrigins":              []string{},
+			"treeIndex":                    []int{},
+			"treeStructure":                "[]",
+			"locationHref":                 robloxSite + "/CreateAccount",
+			"clientConfigSitedataLocation": robloxSite + "/CreateAccount",
+			"clientConfigLanguage":         "",
 		},
-		"proxy":   proxy,
-		"cookies": parseCookieString(cookies),
+		"proxy":     proxy,
+		"cookies":   parseCookieString(cookies),
+		"solve_pow": solvePOW,
 	}
 	if browser_version != "" {
 		body["browser_version"] = browser_version
+	}
+	if strings.TrimSpace(recognitionProvider) != "" {
+		body["recognition_provider"] = strings.TrimSpace(recognitionProvider)
+	}
+	if strings.TrimSpace(recognitionAPIKey) != "" {
+		body["recognition_api_key"] = strings.TrimSpace(recognitionAPIKey)
 	}
 
 	debugLog("blob_len=%d proxy=%q", len(blob), redactProxy(proxy))
@@ -152,7 +191,7 @@ func getTokenNetz(api_key, http_version, browser_version, blob, proxy, cookies s
 		}
 
 		debugLog("poll starting task_id=%s", taskID)
-		for count := 0; count <= 150; count++ {
+		for count := 0; count <= 350; count++ {
 			pollURL := fmt.Sprintf("%s/getTask?task_id=%s", serverURL, url.QueryEscape(taskID))
 			req2, _ := http.NewRequest("GET", pollURL, nil)
 
@@ -328,4 +367,166 @@ func getTokenCDS(api_key, http_version, browser_version, blob, proxy, cookies st
 	}
 
 	return nil, fmt.Errorf("failed get token")
+}
+
+// getTokenHachi talks to the self-hosted hachi-captcha solver's blocking
+// POST /solve endpoint. api_key is expected as "recognition_provider:key"
+// (e.g. "omocaptcha:PKG_..."); this is how settings_captcha.api_key threads
+// the third-party image-recognition credential through to hachi without
+// needing dedicated config.yml fields. solve_pow is always requested from
+// hachi locally (SOLVE_POW_LOCAL=true server-side), so a "pow_needed"
+// response (client-side POW, unimplemented here) is treated as a failure.
+func getTokenHachi(api_key, blob, proxy, cookies string, solvePOW bool) (*TokenResult, error) {
+	recognitionProvider := ""
+	recognitionKey := api_key
+	if idx := strings.Index(api_key, ":"); idx != -1 {
+		recognitionProvider = strings.TrimSpace(api_key[:idx])
+		recognitionKey = strings.TrimSpace(api_key[idx+1:])
+	}
+
+	additionalInfo := map[string]interface{}{
+		"proxy":   proxy,
+		"cookies": parseCookieString(cookies),
+	}
+	if recognitionKey != "" {
+		additionalInfo["recognition_api_key"] = recognitionKey
+	}
+	if recognitionProvider != "" {
+		additionalInfo["recognition_provider"] = recognitionProvider
+	}
+
+	body := map[string]interface{}{
+		"challenge": map[string]interface{}{
+			"public_key":                            robloxRegisterPublicKey,
+			"site_url":                              robloxSite,
+			"api_url":                               robloxAPIURL,
+			"locale":                                "en-US",
+			"window_ancestor_origins":               []string{robloxSite, robloxSite},
+			"window_tree_index":                     []int{0, 0},
+			"window_tree_structure":                 "[[[]]]",
+			"window_location_href":                  robloxSite + "/arkose/iframe",
+			"client_config_site_data_location_href": robloxSite + "/arkose/iframe",
+			"client_config_api_url":                 robloxAPIURL,
+			"capi_mode":                             "inline",
+			"style_theme":                           "default",
+			"solve_pow":                             solvePOW,
+			"max_waves":                             20,
+			"extra_data": map[string]interface{}{
+				"blob": blob,
+			},
+		},
+		"additional_info": additionalInfo,
+	}
+
+	debugLog("hachi blob_len=%d proxy=%q", len(blob), redactProxy(proxy))
+
+	jsonBody, _ := json.Marshal(body)
+	req, err := http.NewRequest("POST", hachiServerURL+"/solve", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed hachi solve request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := hachiClient.Do(req)
+	if err != nil {
+		debugLog("hachi solve do err: %v", err)
+		return nil, fmt.Errorf("failed hachi solve: %s", err)
+	}
+	defer resp.Body.Close()
+
+	data, _ := ioutil.ReadAll(resp.Body)
+
+	var solveResp map[string]interface{}
+	if err := json.Unmarshal(data, &solveResp); err != nil {
+		debugLog("hachi solve json err: %v body=%s", err, string(data))
+		return nil, fmt.Errorf("failed jsonParse hachi solve")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := solveResp["detail"].(string)
+		if msg == "" {
+			msg, _ = solveResp["message"].(string)
+		}
+		debugLog("hachi solve http=%d msg=%s", resp.StatusCode, msg)
+		return nil, fmt.Errorf("failed hachi solve: %s", msg)
+	}
+
+	status, _ := solveResp["status"].(string)
+	debugLog("hachi solve response status=%s", status)
+
+	switch status {
+	case "done":
+		tok, ok := solveResp["token"].(string)
+		if !ok || tok == "" {
+			return nil, fmt.Errorf("hachi done but no token field")
+		}
+		debugLog("hachi SUCCESS token_len=%d", len(tok))
+		return &TokenResult{Token: tok}, nil
+
+	case "pow_needed":
+		return nil, fmt.Errorf("hachi requires client-side POW (unsupported); check SOLVE_POW_LOCAL on the hachi server")
+
+	default:
+		msg, _ := solveResp["message"].(string)
+		return nil, fmt.Errorf("hachi failed: %s", msg)
+	}
+}
+
+func getTokenHBA(blob, proxy string) (*TokenResult, error) {
+	body := map[string]interface{}{
+		"blob":  blob,
+		"proxy": proxy,
+	}
+	jsonBody, _ := json.Marshal(body)
+	req, err := http.NewRequest("POST", "http://127.0.0.1:8766/prime", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed HBA request creation: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	hbaClient := &http.Client{Timeout: 95 * time.Second}
+	resp, err := hbaClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed HBA call: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed read HBA response: %w", err)
+	}
+
+	var hbaResp map[string]interface{}
+	if err := json.Unmarshal(data, &hbaResp); err != nil {
+		return nil, fmt.Errorf("failed parse HBA response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		errMsg, _ := hbaResp["error"].(string)
+		return nil, fmt.Errorf("HBA error status %d: %s", resp.StatusCode, errMsg)
+	}
+
+	token, ok := hbaResp["token"].(string)
+	if !ok || token == "" {
+		return nil, fmt.Errorf("HBA returned empty token")
+	}
+
+	isSilent, _ := hbaResp["is_silentpass"].(bool)
+	ua, _ := hbaResp["user_agent"].(string)
+
+	cookieMap := map[string]string{}
+	if rawCookies, ok := hbaResp["cookies"].(map[string]interface{}); ok {
+		for k, v := range rawCookies {
+			if valStr, ok := v.(string); ok {
+				cookieMap[k] = valStr
+			}
+		}
+	}
+
+	debugLog("HBA SUCCESS token_len=%d is_silentpass=%v cookies_len=%d", len(token), isSilent, len(cookieMap))
+	return &TokenResult{
+		Token:     token,
+		UserAgent: ua,
+		Cookies:   cookieMap,
+	}, nil
 }

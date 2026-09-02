@@ -2,8 +2,12 @@ settings_captcha:
   api_key: "b051743e-30ae-47dc-9213-3b50c430ea7b"
   provider: "netz"
   http_version: "HTTP2"
-  browser_version: "Chrome148"
+  browser_version: "Chrome146"
   solve_pow: true
+  recognition_provider: "yescaptcha"
+  recognition_api_key: "9331bda2e6320144fa23b01fb55fd3dd4eb1a55489373"
 settings_register:
-  threads: 1
-  limit_accounts: 3
+  threads: 10
+  limit_accounts: 100
+  debug: false
+

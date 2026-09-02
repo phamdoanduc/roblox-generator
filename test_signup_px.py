@@ -40,13 +40,28 @@ async def main():
         async def on_request(request):
             if "roblox.com" in request.url:
                 captured_requests.append({
+                    "id": id(request),
                     "method": request.method,
                     "url": request.url,
-                    "headers": dict(request.headers),
+                    "request_headers": dict(request.headers),
                     "postData": request.post_data
                 })
 
+        async def on_response(response):
+            if "roblox.com" in response.url:
+                try:
+                    body = await response.text()
+                except:
+                    body = "<binary or missing>"
+                for req in captured_requests:
+                    if req.get("id") == id(response.request):
+                        req["status"] = response.status
+                        req["response_headers"] = dict(response.headers)
+                        req["response_body"] = body
+                        break
+
         page.on("request", on_request)
+        page.on("response", on_response)
 
         print("[2] Navigating to https://www.roblox.com/...")
         await page.goto("https://www.roblox.com/", wait_until="networkidle", timeout=40000)

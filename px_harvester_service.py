@@ -46,8 +46,8 @@ async def harvest_px_cookies(proxy_raw: str, timeout_sec: int = 35) -> dict:
                 viewport={"width": 1366, "height": 768},
                 locale="en-US",
                 timezone_id="America/New_York",
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
-                extra_http_headers={"sec-ch-ua": '"Not;A=Brand";v="99", "Google Chrome";v="148", "Chromium";v="148"'}
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+                extra_http_headers={"sec-ch-ua": '"Not(A:Brand";v="24", "Chromium";v="146", "Google Chrome";v="146"'}
             )
             page = await context.new_page()
             await page.goto("https://www.roblox.com/", wait_until="networkidle", timeout=timeout_sec * 1000)
