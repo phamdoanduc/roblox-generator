@@ -104,8 +104,8 @@ func isTLSConsistentUA(ua string) bool {
 var nettifySessionRegex = regexp.MustCompile(`-session-[a-zA-Z0-9]+`)
 
 func EnsureStickyProxy(proxyStr string) string {
-	if strings.Contains(proxyStr, "nettify.xyz") {
-		randSess := fmt.Sprintf("-session-%06x", rand.Uint32()&0xffffff)
+	if strings.Contains(proxyStr, "nettify.xyz") || strings.Contains(proxyStr, "flashproxy.io") {
+		randSess := fmt.Sprintf("-session-%08x", rand.Uint32())
 		return nettifySessionRegex.ReplaceAllString(proxyStr, randSess)
 	}
 	if strings.Contains(proxyStr, "dataimpulse.com") && !strings.Contains(proxyStr, ";sessid.") {
@@ -798,8 +798,19 @@ func (g *Container) SignUp() error {
 					respRedeem, errRedeem = g.DoRequest("POST", "https://apis.roblox.com/v2/alt-captcha?urlLocale=en_us", v2CapBody)
 				}
 			}
-			if errRedeem != nil || respRedeem.HttpResponse.StatusCode != 200 {
-				return fmt.Errorf("failed get redemption_token from /v2/alt-captcha: status=%d body=%s", respRedeem.HttpResponse.StatusCode, string(respRedeem.Body))
+			if errRedeem != nil {
+				return fmt.Errorf("failed get redemption_token from /v2/alt-captcha: %w", errRedeem)
+			}
+			if respRedeem == nil || respRedeem.HttpResponse == nil || respRedeem.HttpResponse.StatusCode != 200 {
+				status := 0
+				bodyStr := ""
+				if respRedeem != nil {
+					bodyStr = string(respRedeem.Body)
+					if respRedeem.HttpResponse != nil {
+						status = respRedeem.HttpResponse.StatusCode
+					}
+				}
+				return fmt.Errorf("failed get redemption_token from /v2/alt-captcha: status=%d body=%s", status, bodyStr)
 			}
 
 			var redeemRes struct {
@@ -862,8 +873,19 @@ func (g *Container) SignUp() error {
 			g.HttpClient.OrderedHeaders = append(g.HttpClient.OrderedHeaders, []string{"priority", "u=1, i"})
 
 			respV2, errV2 := g.DoRequest("POST", "https://apis.roblox.com/challenge/v1/continue?urlLocale=en_us", captchav2Body)
-			if errV2 != nil || respV2.HttpResponse.StatusCode != 200 {
-				return fmt.Errorf("captchav2 continue failed: status=%d body=%s", respV2.HttpResponse.StatusCode, string(respV2.Body))
+			if errV2 != nil {
+				return fmt.Errorf("captchav2 continue failed: %w", errV2)
+			}
+			if respV2 == nil || respV2.HttpResponse == nil || respV2.HttpResponse.StatusCode != 200 {
+				status := 0
+				bodyStr := ""
+				if respV2 != nil {
+					bodyStr = string(respV2.Body)
+					if respV2.HttpResponse != nil {
+						status = respV2.HttpResponse.StatusCode
+					}
+				}
+				return fmt.Errorf("captchav2 continue failed: status=%d body=%s", status, bodyStr)
 			}
 
 			// Extract inner Arkose metadata blob & unifiedCaptchaId from continue response
