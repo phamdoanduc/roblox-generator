@@ -86,12 +86,15 @@ func e8() string {
 
 func GetProxy() string {
 	mu.Lock()
+	defer mu.Unlock()
 	if len(proxies) == 0 {
-		mu.Unlock()
 		return ""
 	}
-	p := proxies[rand.Intn(len(proxies))]
-	mu.Unlock()
+	p := proxies[0]
+	proxies = proxies[1:]
+
+	// Delete used proxy from input/proxies.txt permanently to prevent duplicate usage
+	_ = os.WriteFile("input/proxies.txt", []byte(strings.Join(proxies, "\n")), 0644)
 
 	p = strings.TrimSpace(p)
 	if strings.EqualFold(p, "direct") || strings.EqualFold(p, "none") {
