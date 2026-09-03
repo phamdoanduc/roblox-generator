@@ -446,20 +446,41 @@ func (g *Container) BeforeSignUp() error {
 // sends, which is itself a risk signal. The original simply grabs the cookie
 // the signup response already set and saves it.
 func (g *Container) finalizeSignup(response *azuretls.Response, effectiveUA string) error {
-	cookies := response.Header.Get("set-cookie")
-
-	if cookies == "" {
-		return fmt.Errorf("failed get .ROBLOSECURITY")
-	}
-
-	parts := strings.Split(cookies, ";")
-
 	cookieValue := ""
 
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, ".ROBLOSECURITY=") {
-			cookieValue = strings.TrimPrefix(part, ".ROBLOSECURITY=")
+	// 1. Check parsed response.Cookies map directly
+	if val, ok := response.Cookies[".ROBLOSECURITY"]; ok && strings.TrimSpace(val) != "" {
+		cookieValue = strings.TrimSpace(val)
+	}
+
+	// 2. Fallback: inspect all Set-Cookie headers in the response
+	if cookieValue == "" {
+		for _, sc := range response.Header["Set-Cookie"] {
+			for _, part := range strings.Split(sc, ";") {
+				part = strings.TrimSpace(part)
+				if strings.HasPrefix(part, ".ROBLOSECURITY=") {
+					cookieValue = strings.TrimPrefix(part, ".ROBLOSECURITY=")
+					break
+				}
+			}
+			if cookieValue != "" {
+				break
+			}
+		}
+	}
+
+	// 3. Fallback: inspect raw set-cookie header if any
+	if cookieValue == "" {
+		cookies := response.Header.Get("set-cookie")
+		if cookies != "" {
+			parts := strings.Split(cookies, ";")
+			for _, part := range parts {
+				part = strings.TrimSpace(part)
+				if strings.HasPrefix(part, ".ROBLOSECURITY=") {
+					cookieValue = strings.TrimPrefix(part, ".ROBLOSECURITY=")
+					break
+				}
+			}
 		}
 	}
 
